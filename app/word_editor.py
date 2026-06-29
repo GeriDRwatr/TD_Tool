@@ -1,7 +1,7 @@
 import os
 import sys
 from PySide6 import QtWidgets, QtCore, QtGui
-from theme import THEME_MGR
+from .theme import THEME_MGR
 
 try:
     from docx import Document as DocxDocument

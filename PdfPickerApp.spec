@@ -24,7 +24,7 @@ a = Analysis(
     ['main.py'],
     pathex=['.'],
     binaries=[],
-    datas=[],
+    datas=[('app/theme.json', 'app')],
     hiddenimports=[
         'PySide6.QtWidgets',
         'PySide6.QtCore',

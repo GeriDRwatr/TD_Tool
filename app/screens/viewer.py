@@ -1,8 +1,8 @@
 import os
 import fitz
 from PySide6 import QtWidgets, QtCore, QtGui
-from theme import THEME_MGR
-import icons as _icons
+from ..theme import THEME_MGR
+from .. import icons as _icons
 
 
 class _FirstPageButton(QtWidgets.QAbstractButton):

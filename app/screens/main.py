@@ -2,11 +2,11 @@ import os
 import json
 from PySide6 import QtWidgets, QtCore, QtGui
 
-from screen_merge import ScreenMergeMulti
-from screen_viewer import ScreenViewer
-from word_editor import WordEditor
-from theme import THEME_MGR
-import icons as _icons
+from .merge import ScreenMergeMulti
+from .viewer import ScreenViewer
+from ..word_editor import WordEditor
+from ..theme import THEME_MGR
+from .. import icons as _icons
 
 SIDEBAR_EXPANDED  = 210
 SIDEBAR_COLLAPSED = 62
@@ -889,7 +889,8 @@ class ScreenMain(QtWidgets.QWidget):
 
     # ── window state ──────────────────────────────────────────────────────────
 
-    _STATE_FILE = os.path.join(os.path.dirname(__file__), "window_state.json")
+    _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    _STATE_FILE = os.path.join(_PROJECT_ROOT, "window_state.json")
 
     def _save_window_state(self):
         try:

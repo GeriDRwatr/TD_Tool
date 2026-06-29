@@ -1,7 +1,7 @@
 from PySide6 import QtWidgets, QtCore, QtGui
 
-from constants import BREAK_COLOR, GREEN_COLOR, group_color as _group_color
-import icons as _icons
+from .constants import BREAK_COLOR, GREEN_COLOR, group_color as _group_color
+from . import icons as _icons
 
 
 def _mix_colors(c1: QtGui.QColor, c2: QtGui.QColor, t: float) -> QtGui.QColor:

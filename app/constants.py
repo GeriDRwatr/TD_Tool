@@ -1,4 +1,4 @@
-from theme import THEME_MGR
+from .theme import THEME_MGR
 
 GREEN_COLOR  = "#6EDE8A"
 RED_COLOR    = "#FF7C75"

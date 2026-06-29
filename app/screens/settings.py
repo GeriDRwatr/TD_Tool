@@ -1,6 +1,6 @@
-import icons as _icons
+from .. import icons as _icons
 from PySide6 import QtWidgets, QtCore, QtGui
-from theme import THEME_MGR
+from ..theme import THEME_MGR
 
 
 # ── Mini live preview ──────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import math
 from PySide6 import QtCore, QtGui
-from theme import THEME_MGR
+from .theme import THEME_MGR
 
 _ICON_NAMES = frozenset([
     "scissors", "merge", "rotate", "compress_layers", "gear",

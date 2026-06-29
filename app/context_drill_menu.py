@@ -1,5 +1,5 @@
 from PySide6 import QtWidgets, QtCore, QtGui
-from theme import THEME_MGR
+from .theme import THEME_MGR
 
 
 class _Sep(QtWidgets.QWidget):

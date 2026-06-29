@@ -1,8 +1,8 @@
 import os
 from PySide6 import QtWidgets, QtCore
 
-from constants import BREAK_COLOR, GREEN_COLOR
-from widgets import PressableNeumorphicButton
+from ..constants import BREAK_COLOR, GREEN_COLOR
+from ..widgets import PressableNeumorphicButton
 
 
 class ScreenPick(QtWidgets.QWidget):

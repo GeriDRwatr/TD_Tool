@@ -3,9 +3,9 @@ from collections import defaultdict
 import fitz
 from PySide6 import QtWidgets, QtCore, QtGui
 
-from constants import GREEN_COLOR, MAX_GROUPS, THUMB_SCALE, group_color
-from widgets import FlatButton, FullBorderPaper, GroupButton, DraggableCard
-from pdf_utils import clear_layout, safe_thumbnail_render, split_pdf
+from ..constants import GREEN_COLOR, MAX_GROUPS, THUMB_SCALE, group_color
+from ..widgets import FlatButton, FullBorderPaper, GroupButton, DraggableCard
+from ..pdf_utils import clear_layout, safe_thumbnail_render, split_pdf
 
 
 class GroupDeck(QtWidgets.QWidget):

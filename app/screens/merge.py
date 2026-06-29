@@ -3,10 +3,10 @@ from collections import defaultdict, OrderedDict, deque
 import fitz
 from PySide6 import QtWidgets, QtCore, QtGui
 
-from constants import GREEN_COLOR, MAX_GROUPS, THUMB_SCALE, group_color
-from widgets import (FullBorderPaper, GroupButton, GroupDeck,
+from ..constants import GREEN_COLOR, MAX_GROUPS, THUMB_SCALE, group_color
+from ..widgets import (FullBorderPaper, GroupButton, GroupDeck,
                      DraggableCard, ThumbnailActionButton)
-from pdf_utils import clear_layout, safe_thumbnail_render
+from ..pdf_utils import clear_layout, safe_thumbnail_render
 
 
 class ScreenMergeMulti(QtWidgets.QWidget):
