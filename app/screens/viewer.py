@@ -3,35 +3,30 @@ import fitz
 from PySide6 import QtWidgets, QtCore, QtGui
 from ..theme import THEME_MGR
 from .. import icons as _icons
+from ..widgets import _HoverMixin
 
 
-class _FirstPageButton(QtWidgets.QAbstractButton):
+class _FirstPageButton(_HoverMixin, QtWidgets.QAbstractButton):
     """Кнопка «на першу сторінку» у статус-барі viewer — малює arrow_up через icons.draw()."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._hover = False
         self._press = False
         self.setFixedSize(20, 20)
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self.setFocusPolicy(QtCore.Qt.NoFocus)
         self.setToolTip("Перша сторінка")
-        self.setAttribute(QtCore.Qt.WA_Hover)
-
-    def event(self, e):
-        if e.type() == QtCore.QEvent.HoverEnter:
-            self._hover = True;  self.update()
-        elif e.type() == QtCore.QEvent.HoverLeave:
-            self._hover = False; self.update()
-        return super().event(e)
+        self._init_hover()
 
     def mousePressEvent(self, e):
         if e.button() == QtCore.Qt.LeftButton:
-            self._press = True; self.update()
+            self._press = True
+            self.update()
         super().mousePressEvent(e)
 
     def mouseReleaseEvent(self, e):
-        self._press = False; self.update()
+        self._press = False
+        self.update()
         super().mouseReleaseEvent(e)
 
     def paintEvent(self, event):
@@ -510,15 +505,6 @@ class ScreenViewer(QtWidgets.QWidget):
                 y = (page_rect.height() - scaled.height()) // 2
                 painter.drawPixmap(x, y, scaled)
         painter.end()
-
-    # ── file open ─────────────────────────────────────────────────────────────
-
-    def _on_open_file(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Відкрити PDF", "", "PDF files (*.pdf)"
-        )
-        if path:
-            self.load_pdf(path)
 
     # ── events ────────────────────────────────────────────────────────────────
 

@@ -12,7 +12,7 @@ Stack: **PySide6 + PyMuPDF (fitz)**. All UI custom-painted (paintEvent). No Qt D
 | `theme.py` | `Theme` dataclass · `ThemeManager` · `THEME_MGR` singleton |
 | `constants.py` | `group_color(n)` reads THEME_MGR; fixed color constants |
 | `icons.py` | `draw(p,rect,name,color)` · `sf_font(px,w)` — stroke from THEME_MGR |
-| `pdf_utils.py` | `clear_layout` · `safe_thumbnail_render` · `split_pdf` |
+| `pdf_utils.py` | `clear_layout` · `safe_thumbnail_render` |
 | `widgets.py` | All reusable thumbnail/card widgets (see Widgets section) |
 | `screen_main.py` | `ScreenMain` · `DropZone` · `NavButton` · `DrillDownPanel` |
 | `screen_merge.py` | `ScreenMergeMulti` — split/merge editor |
@@ -22,8 +22,6 @@ Stack: **PySide6 + PyMuPDF (fitz)**. All UI custom-painted (paintEvent). No Qt D
 | `win_register.py` | `register_as_pdf_viewer()` — Windows HKCU registry; no-op elsewhere |
 | `theme.json` | Saved theme overrides (created on first save) |
 | `window_state.json` | Saved window size |
-| `context_drill_menu.py` | **UNUSED** — popup drill-down widget (superseded by left DrillDownPanel) |
-| `screen_split.py` · `screen_pick.py` | **UNUSED** |
 
 ### Linux packaging (`linux/`)
 
@@ -109,7 +107,7 @@ DropZone(
     extensions  = (".pdf",),
     dialog_filter = "PDF files (*.pdf)",
 )
-# Word drop zone uses: hint_text="Відкрити Word\nПеретягни .docx...", extensions=(".docx",".doc")
+# Word drop zone uses: hint_text="Відкрити Word\nПеретягни .docx...", extensions=(".docx",)
 # _accepts(path) checks any(path.lower().endswith(ext) for ext in extensions)
 ```
 
@@ -223,8 +221,10 @@ _save_to(path):
 ### PDF export
 
 ```python
-Windows: docx2pdf.convert(src, out)   # fallback: QPrinter PDF output
-Linux:   libreoffice --headless --convert-to pdf
+# Cascading fallback — platform-agnostic:
+1. libreoffice --headless --convert-to pdf   (if installed)
+2. docx2pdf.convert(src, out)               (if installed; uses MS Word on Win/macOS)
+3. QPrinter PDF output                      (always works; limited formatting)
 ```
 
 ---
@@ -489,15 +489,12 @@ group_color(n):   # reads THEME_MGR.get().group_color_{n-1}  (live-updating)
 
 | Class | Purpose |
 |---|---|
-| `FlatButton` | Bottom-panel icon+text buttons |
+| `_HoverMixin` | Mixin: `_hover` tracking via `WA_Hover`; call `_init_hover()` in `__init__` |
 | `GroupButton` | Group selector + thumbnail overlay |
 | `GroupDeck` | Collapsed group (animated pixmap stack) |
 | `FullBorderPaper` | White card with colored group border |
 | `ThumbnailActionButton` | 28×28 rotate button in card strip |
 | `DraggableCard` | Thumbnail wrapper; drag + click |
-| `DropGapCell` | Drop placeholder (defined, not used currently) |
-| `PressableNeumorphicButton` | Large neumorphic button (unused) |
-| `CircleToggle` / `ModernToggle` | Checkboxes (unused) |
 
 ### Card structure
 

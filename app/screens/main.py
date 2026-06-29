@@ -7,6 +7,7 @@ from .viewer import ScreenViewer
 from ..word_editor import WordEditor
 from ..theme import THEME_MGR
 from .. import icons as _icons
+from ..widgets import _HoverMixin
 
 SIDEBAR_EXPANDED  = 210
 SIDEBAR_COLLAPSED = 62
@@ -34,7 +35,7 @@ _SIDEBAR_TOGGLE_BTN_SS = """
 
 # ── Sidebar nav button ────────────────────────────────────────────────────────
 
-class NavButton(QtWidgets.QAbstractButton):
+class NavButton(_HoverMixin, QtWidgets.QAbstractButton):
 
     def __init__(self, icon_text, label, parent=None):
         super().__init__(parent)
@@ -42,13 +43,12 @@ class NavButton(QtWidgets.QAbstractButton):
         self._label     = label
         self._active    = False
         self._collapsed = False
-        self._hover     = False
         self.setFixedHeight(52)
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self.setFocusPolicy(QtCore.Qt.NoFocus)
-        self.setAttribute(QtCore.Qt.WA_Hover)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
                            QtWidgets.QSizePolicy.Fixed)
+        self._init_hover()
 
     def set_active(self, v: bool):
         self._active = v
@@ -57,15 +57,6 @@ class NavButton(QtWidgets.QAbstractButton):
     def set_collapsed(self, v: bool):
         self._collapsed = v
         self.update()
-
-    def event(self, e):
-        if e.type() == QtCore.QEvent.HoverEnter:
-            self._hover = True
-            self.update()
-        elif e.type() == QtCore.QEvent.HoverLeave:
-            self._hover = False
-            self.update()
-        return super().event(e)
 
     def paintEvent(self, event):
         p = QtGui.QPainter(self)
@@ -127,26 +118,18 @@ class NavButton(QtWidgets.QAbstractButton):
 
 # ── Drill-down panel (Windows Explorer folder navigation) ─────────────────────
 
-class _BackHeader(QtWidgets.QAbstractButton):
+class _BackHeader(_HoverMixin, QtWidgets.QAbstractButton):
     """Top row of a sub-page: ← arrow + folder title. Click to go back."""
 
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
         self._title = title
-        self._hover = False
         self.setFixedHeight(52)
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self.setFocusPolicy(QtCore.Qt.NoFocus)
-        self.setAttribute(QtCore.Qt.WA_Hover)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
                            QtWidgets.QSizePolicy.Fixed)
-
-    def event(self, e):
-        if e.type() == QtCore.QEvent.HoverEnter:
-            self._hover = True;  self.update()
-        elif e.type() == QtCore.QEvent.HoverLeave:
-            self._hover = False; self.update()
-        return super().event(e)
+        self._init_hover()
 
     def paintEvent(self, event):
         p = QtGui.QPainter(self)
@@ -187,26 +170,18 @@ class _BackHeader(QtWidgets.QAbstractButton):
         p.end()
 
 
-class _SubPageNavButton(QtWidgets.QAbstractButton):
+class _SubPageNavButton(_HoverMixin, QtWidgets.QAbstractButton):
     """Full-width nav button inside a sub-page (no icon, indented label)."""
 
     def __init__(self, label: str, parent=None):
         super().__init__(parent)
         self._label = label
-        self._hover = False
         self.setFixedHeight(50)
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self.setFocusPolicy(QtCore.Qt.NoFocus)
-        self.setAttribute(QtCore.Qt.WA_Hover)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
                            QtWidgets.QSizePolicy.Fixed)
-
-    def event(self, e):
-        if e.type() == QtCore.QEvent.HoverEnter:
-            self._hover = True;  self.update()
-        elif e.type() == QtCore.QEvent.HoverLeave:
-            self._hover = False; self.update()
-        return super().event(e)
+        self._init_hover()
 
     def paintEvent(self, event):
         p = QtGui.QPainter(self)
