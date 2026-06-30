@@ -12,13 +12,6 @@ from ..widgets import _HoverMixin
 SIDEBAR_EXPANDED  = 210
 SIDEBAR_COLLAPSED = 62
 
-NAV_ITEMS = [
-    ("eye",              "Відкрити PDF",             "viewer"),
-    ("merge",            "Розділити/Об'єднати PDF",  "editor"),
-    ("rotate",           "Конвертувати",              "convert"),
-    ("compress_layers",  "Стиснути PDF",              "compress"),
-]
-
 _SIDEBAR_TOGGLE_BTN_SS = """
     QPushButton {
         border: none;
@@ -319,11 +312,11 @@ class DropZone(QtWidgets.QWidget):
 
     file_chosen = QtCore.Signal(list)
 
-    def __init__(self, hint_text="Перетягни PDF сюди або натисни, щоб вибрати",
-                 extensions=(".pdf",), dialog_filter="PDF files (*.pdf)", parent=None):
+    def __init__(self, hint_text="Перетягни файл сюди або натисни, щоб вибрати",
+                 extensions=None, dialog_filter="Усі файли (*)", parent=None):
         super().__init__(parent)
         self._hint_text     = hint_text
-        self._extensions    = tuple(ext.lower() for ext in extensions)
+        self._extensions    = tuple(ext.lower() for ext in extensions) if extensions else None
         self._dialog_filter = dialog_filter
         self.setAcceptDrops(True)
         self._hover      = False
@@ -435,6 +428,8 @@ class DropZone(QtWidgets.QWidget):
                     self.file_chosen.emit(paths)
 
     def _accepts(self, local_path: str) -> bool:
+        if self._extensions is None:
+            return True
         lo = local_path.lower()
         return any(lo.endswith(ext) for ext in self._extensions)
 
@@ -477,6 +472,10 @@ class ComingSoonWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self._label = label
 
+    def set_label(self, label):
+        self._label = label
+        self.update()
+
     def paintEvent(self, event):
         p = QtGui.QPainter(self)
         p.setRenderHint(QtGui.QPainter.Antialiasing)
@@ -495,12 +494,11 @@ class ScreenMain(QtWidgets.QWidget):
 
     def __init__(self):
         super().__init__()
-        self._collapsed       = False
         self._right_collapsed = False
-        self._current         = "editor"
-        self._nav_btns        = {}
+        self._current_format  = "none"    # 'none' | 'pdf' | 'word' | 'unsupported'
+        self._current_path    = None
+        self._pdf_scenario    = "viewer"  # 'viewer' | 'editor' — meaningful when format == 'pdf'
         self._all_right_btns  = []   # all NavButtons across all right-panel pages
-        self._coming_soon     = {}
         self._theme_dividers: list[QtWidgets.QFrame] = []
 
         self.setWindowTitle("TDTool")
@@ -508,9 +506,9 @@ class ScreenMain(QtWidgets.QWidget):
         self.setStyleSheet("background: #21232a;")
 
         self._build_ui()
+        self._right_sidebar.setVisible(False)
         THEME_MGR.add_listener(self._apply_theme)
         self._apply_theme()
-        self._select("viewer")
         self._load_window_state()
 
     # ── build ─────────────────────────────────────────────────────────────────
@@ -520,16 +518,8 @@ class ScreenMain(QtWidgets.QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        root.addWidget(self._make_sidebar())
         root.addWidget(self._make_workspace(), 1)
         root.addWidget(self._make_right_sidebar())
-
-        self._anim = QtCore.QPropertyAnimation(self._sidebar, b"minimumWidth")
-        self._anim.setDuration(220)
-        self._anim.setEasingCurve(QtCore.QEasingCurve.InOutCubic)
-        self._anim.valueChanged.connect(
-            lambda v: self._sidebar.setMaximumWidth(int(v))
-        )
 
         self._ranim = QtCore.QPropertyAnimation(self._right_sidebar, b"minimumWidth")
         self._ranim.setDuration(220)
@@ -538,111 +528,30 @@ class ScreenMain(QtWidgets.QWidget):
             lambda v: self._right_sidebar.setMaximumWidth(int(v))
         )
 
-    def _make_sidebar(self):
-        self._sidebar = QtWidgets.QFrame()
-        self._sidebar.setObjectName("sidebar")
-        self._sidebar.setFixedWidth(SIDEBAR_EXPANDED)
-        self._sidebar.setStyleSheet("""
-            QFrame#sidebar {
-                background: #191b21;
-                border-right: 1px solid #2a3045;
-            }
-        """)
-
-        lay = QtWidgets.QVBoxLayout(self._sidebar)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-
-        # ── toggle / app name ─────────────────────────────────────────────────
-        self._toggle_btn = QtWidgets.QPushButton("☰   TDTool")
-        self._toggle_btn.setFixedHeight(56)
-        self._toggle_btn.setCursor(QtCore.Qt.PointingHandCursor)
-        self._toggle_btn.setFocusPolicy(QtCore.Qt.NoFocus)
-        self._toggle_btn.setStyleSheet(_SIDEBAR_TOGGLE_BTN_SS)
-        self._toggle_btn.clicked.connect(self._toggle_sidebar)
-        lay.addWidget(self._toggle_btn)
-
-        div = QtWidgets.QFrame()
-        div.setFixedHeight(1)
-        div.setStyleSheet("background: #252830;")
-        self._theme_dividers.append(div)
-        lay.addWidget(div)
-        lay.addSpacing(10)
-
-        # ── main nav — DrillDownPanel with PDF and Word folders ───────────────
-        self._left_panel = DrillDownPanel(on_folder_open=self._expand_sidebar)
-
-        pdf_btn = self._left_panel.add_folder("eye", "PDF", [
-            ("Відкрити PDF",             lambda: self._select("viewer")),
-            ("Розділити/Об'єднати PDF",  lambda: self._select("editor")),
-            ("Конвертувати",             lambda: self._select("convert")),
-            ("Стиснути PDF",             lambda: self._select("compress")),
-        ])
-        word_btn = self._left_panel.add_folder("W", "Word", [
-            ("Відкрити Word", self._on_open_word),
-        ])
-        # Clicking the Word folder also switches workspace/right-panel context
-        word_btn.clicked.connect(lambda: self._select("word"))
-
-        self._nav_btns["__pdf__"]  = pdf_btn
-        self._nav_btns["__word__"] = word_btn
-
-        lay.addWidget(self._left_panel, 1)
-
-        div2 = QtWidgets.QFrame()
-        div2.setFixedHeight(1)
-        div2.setStyleSheet("background: #252830;")
-        self._theme_dividers.append(div2)
-        lay.addWidget(div2)
-
-        self._help_btn = NavButton("?", "Довідка")
-        self._help_btn.clicked.connect(lambda: self._merge._show_help())
-        lay.addWidget(self._help_btn)
-
-        lay.addSpacing(8)
-        return self._sidebar
-
     def _make_workspace(self):
         self._stack = QtWidgets.QStackedWidget()
         self._stack.setStyleSheet("background: #21232a;")
 
-        # Drop zone
+        # Universal drop zone — accepts any file; format is detected after drop
         self._drop_zone = DropZone()
         self._drop_zone.file_chosen.connect(self._on_file_chosen)
         self._stack.addWidget(self._drop_zone)
-
-        # Unified editor (merge/split)
-        self._merge = ScreenMergeMulti(self._on_new_file)
-        self._stack.addWidget(self._merge)
 
         # PDF viewer
         self._viewer = ScreenViewer()
         self._stack.addWidget(self._viewer)
 
-        # Viewer drop zone (shown when no PDF is open yet)
-        self._viewer_drop_zone = DropZone()
-        self._viewer_drop_zone.file_chosen.connect(self._on_viewer_file_chosen)
-        self._stack.addWidget(self._viewer_drop_zone)
+        # Unified PDF editor (merge/split)
+        self._merge = ScreenMergeMulti(self._on_new_file)
+        self._stack.addWidget(self._merge)
 
         # Word editor
         self._word_editor = WordEditor()
         self._stack.addWidget(self._word_editor)
 
-        # Word drop zone (shown when no Word file is open yet)
-        self._word_drop_zone = DropZone(
-            hint_text="Відкрити Word\nПеретягни .docx або натисни, щоб вибрати",
-            extensions=(".docx",),
-            dialog_filter="Word files (*.docx)",
-        )
-        self._word_drop_zone.file_chosen.connect(self._on_word_file_chosen)
-        self._stack.addWidget(self._word_drop_zone)
-
-        # Coming soon for remaining placeholders
-        for _, label, key in NAV_ITEMS:
-            if key not in ("editor", "viewer"):
-                w = ComingSoonWidget(label)
-                self._stack.addWidget(w)
-                self._coming_soon[key] = w
+        # Generic placeholder for not-yet-supported formats
+        self._coming_soon = ComingSoonWidget("")
+        self._stack.addWidget(self._coming_soon)
 
         return self._stack
 
@@ -676,15 +585,29 @@ class ScreenMain(QtWidgets.QWidget):
         lay.addWidget(div)
         lay.addSpacing(10)
 
-        # ── context tool stack ────────────────────────────────────────────────
+        # ── context tool stack (format-aware) ──────────────────────────────────
         self._right_tool_stack = QtWidgets.QStackedWidget()
         self._right_tool_stack.setStyleSheet("background: transparent;")
 
-        self._right_tool_stack.addWidget(self._make_editor_tools())   # index 0
-        self._right_tool_stack.addWidget(self._make_viewer_tools())   # index 1
-        self._right_tool_stack.addWidget(QtWidgets.QWidget())         # index 2 (empty)
+        self._right_tool_stack.addWidget(QtWidgets.QWidget())             # 0: no file loaded
+        self._right_tool_stack.addWidget(self._make_pdf_tools())          # 1: pdf
+        self._right_tool_stack.addWidget(self._make_word_tools())         # 2: word
+        self._right_tool_stack.addWidget(self._make_unsupported_tools())  # 3: unsupported
 
         lay.addWidget(self._right_tool_stack, 1)
+
+        div2 = QtWidgets.QFrame()
+        div2.setFixedHeight(1)
+        div2.setStyleSheet("background: #252830;")
+        self._theme_dividers.append(div2)
+        lay.addWidget(div2)
+
+        self._help_btn = NavButton("?", "Довідка")
+        self._help_btn.clicked.connect(lambda: self._merge._show_help())
+        self._all_right_btns.append(self._help_btn)
+        lay.addWidget(self._help_btn)
+        lay.addSpacing(8)
+
         return self._right_sidebar
 
     def _make_tool_page(self, entries: list) -> QtWidgets.QWidget:
@@ -702,26 +625,38 @@ class ScreenMain(QtWidgets.QWidget):
         pl.addStretch()
         return page
 
-    def _make_editor_tools(self) -> QtWidgets.QWidget:
-        return self._make_tool_page([
-            ("checkmark",   "Виділити все",       self._merge.select_all),
-            ("xmark",       "Очистити виділення", self._merge.clear_selection),
-            ("save",        "Експортувати PDF",   self._merge.run_merge),
-            ("plus_circle", "Додати файл",        self._merge._on_add_file),
-            ("arrow_left",  "Новий файл",         self._on_new_file),
-        ])
-
-    def _make_viewer_tools(self) -> QtWidgets.QWidget:
+    def _make_pdf_tools(self) -> QtWidgets.QWidget:
         panel = DrillDownPanel()
 
-        panel.add_action("eye", "Відкрити PDF", self._on_viewer_open_file)
-        panel.add_folder("printer", "Друк документа", [
+        self._pdf_view_btn = panel.add_action("eye", "Переглянути", self._on_pdf_view)
+        self._pdf_edit_btn = panel.add_folder("merge", "Розділити/Об'єднати PDF", [
+            ("Виділити все",       self._merge.select_all),
+            ("Очистити виділення", self._merge.clear_selection),
+            ("Експортувати PDF",   self._merge.run_merge),
+            ("Додати файл",        self._merge._on_add_file),
+        ])
+        self._pdf_edit_btn.clicked.connect(self._on_pdf_edit)
+
+        print_btn = panel.add_folder("printer", "Друк документа", [
             ("Друкувати...",        self._on_print),
             ("Попередній перегляд", self._on_print_preview),
         ])
+        print_btn.clicked.connect(self._on_pdf_view)
+
+        panel.add_action("arrow_left", "Новий файл", self._on_new_file)
 
         self._all_right_btns.extend(panel.nav_buttons)
         return panel
+
+    def _make_word_tools(self) -> QtWidgets.QWidget:
+        return self._make_tool_page([
+            ("arrow_left", "Новий файл", self._on_new_file),
+        ])
+
+    def _make_unsupported_tools(self) -> QtWidgets.QWidget:
+        return self._make_tool_page([
+            ("arrow_left", "Новий файл", self._on_new_file),
+        ])
 
     def _on_print(self):
         self._viewer.print_document()
@@ -734,12 +669,6 @@ class ScreenMain(QtWidgets.QWidget):
     def _apply_theme(self):
         t = THEME_MGR.get()
         self.setStyleSheet(f"background: {t.bg_main};")
-        self._sidebar.setStyleSheet(f"""
-            QFrame#sidebar {{
-                background: {t.bg_sidebar};
-                border-right: 1px solid {t.bg_border};
-            }}
-        """)
         self._right_sidebar.setStyleSheet(f"""
             QFrame#right_sidebar {{
                 background: {t.bg_sidebar};
@@ -749,57 +678,41 @@ class ScreenMain(QtWidgets.QWidget):
         self._stack.setStyleSheet(f"background: {t.bg_main};")
         for div in self._theme_dividers:
             div.setStyleSheet(f"background: {t.bg_hover};")
-        all_nav = list(self._nav_btns.values()) + self._all_right_btns + [self._help_btn]
-        for btn in all_nav:
+        for btn in self._all_right_btns:
             btn.update()
         self._drop_zone.update()
-        self._viewer_drop_zone.update()
-        self._word_drop_zone.update()
         self._viewer.apply_theme()
         self._word_editor.apply_theme()
 
-    # ── navigation ────────────────────────────────────────────────────────────
+    # ── PDF scenario switching ───────────────────────────────────────────────
 
-    _PDF_KEYS = frozenset({"viewer", "editor", "convert", "compress"})
+    def _update_pdf_btn_states(self):
+        self._pdf_view_btn.set_active(self._pdf_scenario == "viewer")
+        self._pdf_edit_btn.set_active(self._pdf_scenario == "editor")
 
-    def _select(self, key: str):
-        if key != self._current and self._current == "editor":
-            self._merge.reset()
+    def _on_pdf_view(self):
+        if self._current_format != "pdf":
+            return
+        self._pdf_scenario = "viewer"
+        if self._viewer._path != self._current_path:
+            self._viewer.load_pdf(self._current_path)
+        self._stack.setCurrentWidget(self._viewer)
+        self._update_pdf_btn_states()
 
-        self._current = key
-
-        # folder button active state
-        self._nav_btns["__pdf__"].set_active(key in self._PDF_KEYS)
-        self._nav_btns["__word__"].set_active(key == "word")
-
-        if key == "editor":
-            self._right_tool_stack.setCurrentIndex(0)
-            if self._merge.has_files():
-                self._stack.setCurrentWidget(self._merge)
-            else:
-                self._stack.setCurrentWidget(self._drop_zone)
-        elif key == "viewer":
-            self._right_tool_stack.setCurrentIndex(1)
-            if self._viewer.has_doc():
-                self._stack.setCurrentWidget(self._viewer)
-            else:
-                self._stack.setCurrentWidget(self._viewer_drop_zone)
-        elif key == "word":
-            self._right_tool_stack.setCurrentIndex(2)
-            if self._word_editor.has_file():
-                self._stack.setCurrentWidget(self._word_editor)
-            else:
-                self._stack.setCurrentWidget(self._word_drop_zone)
-        elif key in self._coming_soon:
-            self._right_tool_stack.setCurrentIndex(2)
-            self._stack.setCurrentWidget(self._coming_soon[key])
+    def _on_pdf_edit(self):
+        if self._current_format != "pdf":
+            return
+        self._pdf_scenario = "editor"
+        if self._current_path not in self._merge.files:
+            self._merge.add_file(self._current_path)
+        self._stack.setCurrentWidget(self._merge)
+        self._update_pdf_btn_states()
 
     # ── public API ────────────────────────────────────────────────────────────
 
     def open_in_viewer(self, path: str):
         """Open a PDF directly in the viewer (e.g. launched from OS file association)."""
-        self._viewer.load_pdf(path)
-        self._select("viewer")
+        self._open_pdf(path)
 
     def _toggle_right_sidebar(self):
         self._right_collapsed = not self._right_collapsed
@@ -819,34 +732,42 @@ class ScreenMain(QtWidgets.QWidget):
     # ── file handling ─────────────────────────────────────────────────────────
 
     def _on_file_chosen(self, paths: list):
+        if not paths:
+            return
+        exts = {os.path.splitext(p)[1].lower() for p in paths}
+        if exts == {".pdf"}:
+            if len(paths) > 1:
+                self._open_pdf_multi(paths)
+            else:
+                self._open_pdf(paths[0])
+        elif exts == {".docx"} and len(paths) == 1:
+            self._open_word(paths[0])
+        else:
+            self._open_unsupported(paths[0])
+
+    def _open_pdf(self, path: str):
+        self._current_format = "pdf"
+        self._current_path   = path
+        self._pdf_scenario   = "viewer"
+        self._viewer.load_pdf(path)
+        self._stack.setCurrentWidget(self._viewer)
+        self._right_tool_stack.setCurrentIndex(1)
+        self._right_sidebar.setVisible(True)
+        self._update_pdf_btn_states()
+
+    def _open_pdf_multi(self, paths: list):
+        self._current_format = "pdf"
+        self._current_path   = paths[0]
+        self._pdf_scenario   = "editor"
+        self._merge.reset()
         for p in paths:
             self._merge.add_file(p)
         self._stack.setCurrentWidget(self._merge)
+        self._right_tool_stack.setCurrentIndex(1)
+        self._right_sidebar.setVisible(True)
+        self._update_pdf_btn_states()
 
-    def _on_viewer_file_chosen(self, paths: list):
-        if paths:
-            self._viewer.load_pdf(paths[0])
-            self._stack.setCurrentWidget(self._viewer)
-
-    def _on_viewer_open_file(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Відкрити PDF", "", "PDF files (*.pdf)"
-        )
-        if path:
-            self._on_viewer_file_chosen([path])
-
-    def _on_open_word(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Відкрити Word документ", "", "Word files (*.docx)"
-        )
-        if path:
-            self._open_word_path(path)
-
-    def _on_word_file_chosen(self, paths: list):
-        if paths:
-            self._open_word_path(paths[0])
-
-    def _open_word_path(self, path: str):
+    def _open_word(self, path: str):
         if self._word_editor.has_unsaved_changes():
             res = QtWidgets.QMessageBox.question(
                 self, "Незбережені зміни",
@@ -855,12 +776,37 @@ class ScreenMain(QtWidgets.QWidget):
             )
             if res != QtWidgets.QMessageBox.Yes:
                 return
+        self._current_format = "word"
+        self._current_path   = path
         self._word_editor.open_file(path)
-        self._select("word")
+        self._stack.setCurrentWidget(self._word_editor)
+        self._right_tool_stack.setCurrentIndex(2)
+        self._right_sidebar.setVisible(True)
+
+    def _open_unsupported(self, path: str):
+        self._current_format = "unsupported"
+        self._current_path   = path
+        ext = os.path.splitext(path)[1] or "файл"
+        self._coming_soon.set_label(f"Формат {ext}")
+        self._stack.setCurrentWidget(self._coming_soon)
+        self._right_tool_stack.setCurrentIndex(3)
+        self._right_sidebar.setVisible(True)
 
     def _on_new_file(self):
+        if self._current_format == "word" and self._word_editor.has_unsaved_changes():
+            res = QtWidgets.QMessageBox.question(
+                self, "Незбережені зміни",
+                "Поточний документ містить незбережені зміни. Закрити без збереження?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            )
+            if res != QtWidgets.QMessageBox.Yes:
+                return
         self._merge.reset()
+        self._current_format = "none"
+        self._current_path   = None
         self._stack.setCurrentWidget(self._drop_zone)
+        self._right_tool_stack.setCurrentIndex(0)
+        self._right_sidebar.setVisible(False)
 
     # ── window state ──────────────────────────────────────────────────────────
 
@@ -887,25 +833,3 @@ class ScreenMain(QtWidgets.QWidget):
     def closeEvent(self, event):
         self._save_window_state()
         super().closeEvent(event)
-
-    # ── sidebar toggle ────────────────────────────────────────────────────────
-
-    def _expand_sidebar(self):
-        if self._collapsed:
-            self._toggle_sidebar()
-
-    def _toggle_sidebar(self):
-        self._collapsed = not self._collapsed
-        target = SIDEBAR_COLLAPSED if self._collapsed else SIDEBAR_EXPANDED
-
-        self._anim.stop()
-        self._anim.setStartValue(self._sidebar.width())
-        self._anim.setEndValue(target)
-        self._anim.start()
-
-        self._toggle_btn.setText("☰" if self._collapsed else "☰   TDTool")
-        for btn in self._nav_btns.values():
-            btn.set_collapsed(self._collapsed)
-        self._help_btn.set_collapsed(self._collapsed)
-        if self._collapsed:
-            self._left_panel.reset()
