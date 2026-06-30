@@ -1,5 +1,6 @@
 import os
 import fitz
+import math as _math
 from PySide6 import QtWidgets, QtCore, QtGui
 from ..theme import THEME_MGR
 from .. import icons as _icons
@@ -57,7 +58,8 @@ class PageWidget(QtWidgets.QWidget):
     cursor_moved  = QtCore.Signal(int, float, float)   # page_num, pdf_x, pdf_y
     cursor_left   = QtCore.Signal()
 
-    def __init__(self, page_num: int, page: fitz.Page, scale: float, parent=None):
+    def __init__(self, page_num: int, page: fitz.Page, scale: float,
+                 rotation: int = 0, parent=None):
         super().__init__(parent)
         self._page_num      = page_num
         self._page          = page
@@ -75,8 +77,12 @@ class PageWidget(QtWidgets.QWidget):
         self._search_current_pdf:    tuple[float, float, float, float] | None = None
         self._search_hits_widget:    list[QtCore.QRectF] = []
         self._search_current_widget: QtCore.QRectF | None = None
-        self._logical_w = 0.0
-        self._logical_h = 0.0
+        self._logical_w   = 0.0
+        self._logical_h   = 0.0
+        self._rotation    = rotation % 360
+        self._coord_mat   = fitz.Matrix(1, 1)
+        self._coord_off_x = 0.0
+        self._coord_off_y = 0.0
         self.setCursor(QtCore.Qt.IBeamCursor)
         self.setMouseTracking(True)
         self._render()
@@ -91,9 +97,12 @@ class PageWidget(QtWidgets.QWidget):
         return screen.devicePixelRatio() if screen else 1.0
 
     def _render(self):
-        dpr = self._device_pixel_ratio()
-        mat = fitz.Matrix(self._scale * dpr, self._scale * dpr)
-        pix = self._page.get_pixmap(matrix=mat, alpha=False)
+        dpr        = self._device_pixel_ratio()
+        # Logical matrix used for coordinate math (no DPR — stays in logical px space)
+        logic_mat  = fitz.Matrix(self._scale, self._scale).prerotate(self._rotation)
+        # Render matrix uses DPR multiplier for sharp physical pixels
+        render_mat = fitz.Matrix(self._scale * dpr, self._scale * dpr).prerotate(self._rotation)
+        pix = self._page.get_pixmap(matrix=render_mat, alpha=False)
         img = QtGui.QImage(pix.samples, pix.width, pix.height,
                            pix.stride, QtGui.QImage.Format_RGB888)
         img.setDevicePixelRatio(dpr)
@@ -102,18 +111,25 @@ class PageWidget(QtWidgets.QWidget):
         self._logical_w = float(logical.width())
         self._logical_h = float(logical.height())
         self.setFixedSize(logical)
+        # Normalisation offset: prerotate shifts coords into negative space;
+        # PyMuPDF's get_pixmap translates back, so we must match it.
+        rect_t = self._page.rect * logic_mat
+        self._coord_mat   = logic_mat
+        self._coord_off_x = -rect_t.x0
+        self._coord_off_y = -rect_t.y0
         self._load_words()
         self._recompute_search_widget_rects()
 
+    def _pdf_point_to_widget(self, x: float, y: float) -> QtCore.QPointF:
+        pt = fitz.Point(x, y) * self._coord_mat
+        return QtCore.QPointF(pt.x + self._coord_off_x, pt.y + self._coord_off_y)
+
     def _pdf_rect_to_widget(self, rect: tuple[float, float, float, float]) -> QtCore.QRectF:
         x0, y0, x1, y1 = rect
-        pr = self._page.rect
-        pw = max(pr.width, 1.0)
-        ph = max(pr.height, 1.0)
-        sw = self._logical_w
-        sh = self._logical_h
-        return QtCore.QRectF(x0 / pw * sw, y0 / ph * sh,
-                             (x1 - x0) / pw * sw, (y1 - y0) / ph * sh)
+        pts = [self._pdf_point_to_widget(x0, y0), self._pdf_point_to_widget(x1, y0),
+               self._pdf_point_to_widget(x1, y1), self._pdf_point_to_widget(x0, y1)]
+        xs = [p.x() for p in pts]; ys = [p.y() for p in pts]
+        return QtCore.QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
 
     def _recompute_search_widget_rects(self):
         self._search_hits_widget = [self._pdf_rect_to_widget(r) for r in self._search_hits_pdf]
@@ -131,21 +147,24 @@ class PageWidget(QtWidgets.QWidget):
 
     def _load_words(self):
         self._words.clear()
-        pr = self._page.rect
-        pw = max(pr.width, 1.0)
-        ph = max(pr.height, 1.0)
-        sw = self._logical_w
-        sh = self._logical_h
         for w in self._page.get_text("words"):
             x0, y0, x1, y1, text, block_no, line_no = w[0], w[1], w[2], w[3], w[4], w[5], w[6]
             self._words.append((
-                QtCore.QRectF(x0 / pw * sw, y0 / ph * sh,
-                              (x1 - x0) / pw * sw, (y1 - y0) / ph * sh),
+                self._pdf_rect_to_widget((x0, y0, x1, y1)),
                 text, block_no, line_no,
             ))
 
     def rescale(self, scale: float):
         self._scale         = scale
+        self._sel_start     = None
+        self._sel_end       = None
+        self._highlighted.clear()
+        self._selected_text = ""
+        self._render()
+        self.update()
+
+    def set_rotation(self, degrees: int):
+        self._rotation      = degrees % 360
         self._sel_start     = None
         self._sel_end       = None
         self._highlighted.clear()
@@ -259,10 +278,10 @@ class PageWidget(QtWidgets.QWidget):
     def _emit_cursor(self, pos: QtCore.QPoint):
         if not self._pixmap or self._logical_w <= 0 or self._logical_h <= 0:
             return
-        pr   = self._page.rect
-        pdf_x = pos.x() / self._logical_w * pr.width
-        pdf_y = pos.y() / self._logical_h * pr.height
-        self.cursor_moved.emit(self._page_num, pdf_x, pdf_y)
+        inv = ~self._coord_mat
+        pdf_pt = fitz.Point(pos.x() - self._coord_off_x,
+                            pos.y() - self._coord_off_y) * inv
+        self.cursor_moved.emit(self._page_num, float(pdf_pt.x), float(pdf_pt.y))
 
     # ── events ────────────────────────────────────────────────────────────────
 
@@ -364,7 +383,8 @@ class _ToolbarButton(_HoverMixin, QtWidgets.QAbstractButton):
         t = THEME_MGR.get()
         r = self.rect()
 
-        if self._hover:
+        enabled = self.isEnabled()
+        if self._hover and enabled:
             bg = QtGui.QColor(t.nav_hover_bg)
             bg.setAlpha(t.nav_hover_bg_alpha)
             p.setPen(QtCore.Qt.NoPen)
@@ -372,7 +392,10 @@ class _ToolbarButton(_HoverMixin, QtWidgets.QAbstractButton):
             p.drawRoundedRect(r.adjusted(2, 2, -2, -2), 7, 7)
 
         color = QtGui.QColor(t.nav_icon_inactive_color)
-        color.setAlpha(t.nav_icon_active_alpha if self._hover else t.nav_icon_inactive_alpha)
+        if not enabled:
+            color.setAlpha(int(t.nav_icon_inactive_alpha * 0.35))
+        else:
+            color.setAlpha(t.nav_icon_active_alpha if self._hover else t.nav_icon_inactive_alpha)
         icon_cx = (r.center().x() - 6) if self._chevron else r.center().x()
         if self._is_icon:
             sz = t.icon_size
@@ -670,6 +693,7 @@ class ScreenViewer(QtWidgets.QWidget):
         self._current_page: int                  = 0
         self._side_mode:    str                  = "thumbnails"   # 'thumbnails' | 'toc'
         self._page_mode:    str                  = "continuous"   # 'continuous' | 'single' | 'two'
+        self._view_rotation: int                 = 0              # 0 / 90 / 180 / 270
         self._search_query:       str = ""
         self._search_results:     list[tuple[int, tuple[float, float, float, float]]] = []
         self._search_current_idx: int = -1
@@ -693,6 +717,7 @@ class ScreenViewer(QtWidgets.QWidget):
         self._lbl_pages.setText(f"1/{self._doc.page_count}")
         self._lbl_cursor.setText("")
         self._scale = self._fit_scale()
+        self._view_rotation = 0
         self._render_pages()
         self._thumb_panel.load_doc(self._doc)
         self._thumb_panel.set_current(0)
@@ -788,6 +813,13 @@ class ScreenViewer(QtWidgets.QWidget):
 
         tbl.addStretch(1)
 
+        info_btn = _ToolbarButton("info")
+        info_btn.setToolTip("Властивості документа")
+        info_btn.clicked.connect(self._show_info_dialog)
+        tbl.addWidget(info_btn)
+
+        tbl.addSpacing(4)
+
         zoom_out_btn = _ToolbarButton("−", is_icon=False)
         zoom_out_btn.setToolTip("Зменшити")
         zoom_out_btn.clicked.connect(self._zoom_out)
@@ -803,6 +835,39 @@ class ScreenViewer(QtWidgets.QWidget):
         zoom_in_btn.clicked.connect(self._zoom_in)
         tbl.addWidget(zoom_in_btn)
 
+        tbl.addSpacing(4)
+
+        share_btn = _ToolbarButton("share")
+        share_btn.setToolTip("Поділитися (скоро)")
+        share_btn.setEnabled(False)
+        tbl.addWidget(share_btn)
+
+        tbl.addSpacing(2)
+
+        markup_btn = _ToolbarButton("markup", chevron=True)
+        markup_btn.setToolTip("Маркування (скоро)")
+        markup_btn.setEnabled(False)
+        tbl.addWidget(markup_btn)
+
+        _sep = QtWidgets.QFrame()
+        _sep.setFrameShape(QtWidgets.QFrame.VLine)
+        _sep.setFixedWidth(1)
+        _sep.setFixedHeight(20)
+        _sep.setStyleSheet("background: rgba(255,255,255,0.14); border: none;")
+        tbl.addSpacing(4)
+        tbl.addWidget(_sep)
+        tbl.addSpacing(4)
+
+        rotate_btn = _ToolbarButton("rotate")
+        rotate_btn.setToolTip("Повернути сторінки на 90°")
+        rotate_btn.clicked.connect(self._rotate_view)
+        tbl.addWidget(rotate_btn)
+
+        atext_btn = _ToolbarButton("a_circle")
+        atext_btn.setToolTip("Текстові анотації (скоро)")
+        atext_btn.setEnabled(False)
+        tbl.addWidget(atext_btn)
+
         tbl.addSpacing(10)
 
         self._search_box = _SearchBox()
@@ -811,7 +876,11 @@ class ScreenViewer(QtWidgets.QWidget):
         self._search_box.prev_requested.connect(self._search_prev)
         tbl.addWidget(self._search_box)
 
-        self._toolbar_buttons = [self._thumb_toggle_btn, zoom_out_btn, zoom_in_btn]
+        self._toolbar_buttons = [
+            self._thumb_toggle_btn, info_btn,
+            zoom_out_btn, zoom_in_btn,
+            share_btn, markup_btn, rotate_btn, atext_btn,
+        ]
         right.addWidget(self._toolbar)
 
         self._toolbar_divider = QtWidgets.QFrame()
@@ -1077,7 +1146,7 @@ class ScreenViewer(QtWidgets.QWidget):
             return
         for i in range(self._doc.page_count):
             page = self._doc.load_page(i)
-            pw   = PageWidget(i, page, self._scale)
+            pw   = PageWidget(i, page, self._scale, rotation=self._view_rotation)
             pw.page_clicked.connect(self._on_page_clicked)
             pw.cursor_moved.connect(self._on_cursor_moved)
             pw.cursor_left.connect(self._on_cursor_left)
@@ -1218,6 +1287,93 @@ class ScreenViewer(QtWidgets.QWidget):
 
     def _update_zoom_label(self):
         self._lbl_zoom.setText(f"{round(self._scale / _SCALE_100 * 100)}%")
+
+    # ── view rotation ─────────────────────────────────────────────────────────
+
+    def _rotate_view(self):
+        self._view_rotation = (self._view_rotation + 90) % 360
+        for pw in self._pages:
+            pw.set_rotation(self._view_rotation)
+        self._rebuild_page_layout()
+
+    # ── document info dialog ──────────────────────────────────────────────────
+
+    def _show_info_dialog(self):
+        if not self._doc:
+            return
+        t = THEME_MGR.get()
+        meta = self._doc.metadata or {}
+        size_bytes = os.path.getsize(self._path) if self._path and os.path.isfile(self._path) else 0
+        if size_bytes >= 1_048_576:
+            size_str = f"{size_bytes / 1_048_576:.1f} МБ"
+        elif size_bytes >= 1024:
+            size_str = f"{size_bytes / 1024:.0f} КБ"
+        else:
+            size_str = f"{size_bytes} Б"
+
+        def _m(key):
+            v = meta.get(key, "")
+            return v.strip() if v else "—"
+
+        rows = [
+            ("Файл",          os.path.basename(self._path) if self._path else "—"),
+            ("Сторінок",      str(self._doc.page_count)),
+            ("Розмір",        size_str),
+            ("Формат",        _m("format")),
+            ("Заголовок",     _m("title")),
+            ("Автор",         _m("author")),
+            ("Тема",          _m("subject")),
+            ("Творець",       _m("creator")),
+            ("Продюсер",      _m("producer")),
+            ("Дата створення",_m("creationDate")[:16].replace("D:", "") if meta.get("creationDate") else "—"),
+        ]
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Властивості документа")
+        dlg.setFixedWidth(440)
+        dlg.setStyleSheet(f"""
+            QDialog {{ background: {t.bg_main}; }}
+            QLabel  {{ color: rgba(255,255,255,0.85); font-size: 12px;
+                       background: transparent; border: none; }}
+        """)
+
+        lay = QtWidgets.QVBoxLayout(dlg)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(0)
+
+        form = QtWidgets.QWidget()
+        form.setStyleSheet("background: transparent;")
+        fl = QtWidgets.QFormLayout(form)
+        fl.setContentsMargins(0, 0, 0, 0)
+        fl.setVerticalSpacing(8)
+        fl.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+
+        for label, value in rows:
+            lbl_l = QtWidgets.QLabel(label + ":")
+            lbl_l.setStyleSheet("color: rgba(255,255,255,0.45); font-size: 11px;"
+                                " background: transparent; border: none;")
+            lbl_v = QtWidgets.QLabel(value)
+            lbl_v.setWordWrap(True)
+            fl.addRow(lbl_l, lbl_v)
+
+        lay.addWidget(form)
+        lay.addSpacing(14)
+
+        close_btn = QtWidgets.QPushButton("Закрити")
+        close_btn.setFixedHeight(32)
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: rgba(255,255,255,0.08);
+                color: rgba(255,255,255,0.85);
+                border: none; border-radius: 8px; font-size: 12px;
+            }}
+            QPushButton:hover  {{ background: rgba(255,255,255,0.14); }}
+            QPushButton:pressed {{ background: rgba(255,255,255,0.06); }}
+        """)
+        close_btn.clicked.connect(dlg.accept)
+        lay.addWidget(close_btn)
+
+        dlg.exec()
 
     # ── text search ───────────────────────────────────────────────────────────
 

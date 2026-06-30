@@ -6,6 +6,7 @@ _ICON_NAMES = frozenset([
     "scissors", "merge", "rotate", "compress_layers", "gear",
     "plus_circle", "play", "arrow_left", "arrow_up", "checkmark", "xmark", "eye", "save",
     "printer", "sidebar", "search",
+    "info", "share", "markup", "a_circle",
 ])
 
 _SF_FAMILY = None
@@ -296,5 +297,70 @@ def draw(p: QtGui.QPainter, rect: QtCore.QRectF,
         hx1 = cx + s * 0.30
         hy1 = cy + s * 0.30
         p.drawLine(QtCore.QPointF(hx0, hy0), QtCore.QPointF(hx1, hy1))
+
+    elif name == "info":
+        # SF "info.circle": circle outline + "i" glyph (dot + stem)
+        r = s * 0.33
+        p.drawEllipse(QtCore.QPointF(cx, cy), r, r)
+        dot_r = max(1.0, s * 0.042)
+        p.setBrush(color)
+        p.setPen(QtCore.Qt.NoPen)
+        p.drawEllipse(QtCore.QPointF(cx, cy - r * 0.36), dot_r, dot_r)
+        stem_pen = QtGui.QPen(color, max(1.4, s * 0.075), QtCore.Qt.SolidLine,
+                              QtCore.Qt.RoundCap, QtCore.Qt.RoundJoin)
+        p.setPen(stem_pen)
+        p.drawLine(QtCore.QPointF(cx, cy - r * 0.06),
+                   QtCore.QPointF(cx, cy + r * 0.55))
+
+    elif name == "share":
+        # SF "square.and.arrow.up": open-top box + upward arrow from center
+        bw   = s * 0.26
+        top  = cy + s * 0.03
+        bot  = cy + s * 0.33
+        p.drawLine(QtCore.QPointF(cx - bw, top),  QtCore.QPointF(cx - bw, bot))
+        p.drawLine(QtCore.QPointF(cx - bw, bot),  QtCore.QPointF(cx + bw, bot))
+        p.drawLine(QtCore.QPointF(cx + bw, bot),  QtCore.QPointF(cx + bw, top))
+        ay1 = cy - s * 0.31
+        ay0 = top
+        p.drawLine(QtCore.QPointF(cx, ay0), QtCore.QPointF(cx, ay1))
+        ah = s * 0.12
+        p.drawLine(QtCore.QPointF(cx, ay1), QtCore.QPointF(cx - ah, ay1 + ah))
+        p.drawLine(QtCore.QPointF(cx, ay1), QtCore.QPointF(cx + ah, ay1 + ah))
+
+    elif name == "markup":
+        # SF "pencil": slanted pencil body with pointed tip + flat eraser end
+        import math as _m
+        angle = _m.radians(45)
+        l = s * 0.30
+        dx, dy = l * _m.cos(angle), l * _m.sin(angle)
+        tip = QtCore.QPointF(cx - dx, cy + dy)
+        top = QtCore.QPointF(cx + dx, cy - dy)
+        perp_dx, perp_dy = dy * 0.14, dx * 0.14
+        p.drawLine(QtCore.QPointF(tip.x() + perp_dx, tip.y() - perp_dy),
+                   QtCore.QPointF(top.x() + perp_dx, top.y() - perp_dy))
+        p.drawLine(QtCore.QPointF(tip.x() - perp_dx, tip.y() + perp_dy),
+                   QtCore.QPointF(top.x() - perp_dx, top.y() + perp_dy))
+        p.drawLine(top, QtCore.QPointF(top.x() - perp_dx * 2, top.y() + perp_dy * 2))
+        p.drawLine(top, QtCore.QPointF(top.x() + perp_dx * 2, top.y() - perp_dy * 2))
+        tip_path = QtGui.QPainterPath()
+        tip_path.moveTo(tip)
+        tip_path.lineTo(tip.x() + perp_dx, tip.y() - perp_dy)
+        tip_path.lineTo(tip.x() - perp_dx, tip.y() + perp_dy)
+        tip_path.closeSubpath()
+        p.setBrush(color)
+        p.setPen(QtCore.Qt.NoPen)
+        p.drawPath(tip_path)
+
+    elif name == "a_circle":
+        # SF "a.circle": circle outline + capital "A" inside
+        r = s * 0.33
+        p.drawEllipse(QtCore.QPointF(cx, cy), r, r)
+        font = QtGui.QFont(_SF_FAMILY or "")
+        font.setPixelSize(int(s * 0.38))
+        font.setWeight(QtGui.QFont.Medium)
+        p.setFont(font)
+        p.setPen(color)
+        p.drawText(QtCore.QRectF(cx - r, cy - r, r * 2, r * 2),
+                   QtCore.Qt.AlignCenter, "A")
 
     p.restore()
