@@ -1,4 +1,4 @@
-# PdfPickerApp — Інструкція для встановлення на Linux
+# TDTool — Інструкція для встановлення на Linux
 
 Переглядач і редактор PDF: перегляд, зміна порядку сторінок,
 розбивка документа на кілька файлів за групами.
@@ -43,8 +43,8 @@ sudo pacman -S python python-pip
 ### 1.2 Розпакуй архів і перейди в папку
 
 ```bash
-unzip PdfPickerApp_linux.zip
-cd PdfPickerApp_linux
+unzip TDTool_linux.zip
+cd TDTool_linux
 ```
 
 ### 1.3 Встанови залежності та запусти
@@ -97,7 +97,7 @@ pip install PySide6 PyMuPDF pyinstaller pyinstaller-hooks-contrib
 ### Збери пакет
 
 ```bash
-cd PdfPickerApp_linux
+cd TDTool_linux
 
 # Зібрати всі формати одночасно:
 bash linux/build.sh
@@ -110,7 +110,7 @@ bash linux/build.sh --rpm        # тільки .rpm
 
 Готові файли з'являться в папці `dist_linux/`.
 
-> **Іконка:** Якщо хочеш власну іконку — поклади PNG 256×256 як `linux/pdfpickerapp.png`
+> **Іконка:** Якщо хочеш власну іконку — поклади PNG 256×256 як `linux/tdtool.png`
 > перед збіркою. Якщо файл відсутній, скрипт автоматично генерує однокольоровий placeholder.
 
 ---
@@ -121,8 +121,8 @@ AppImage — самодостатній файл, не потребує вста
 
 ```bash
 # Після збірки:
-chmod +x dist_linux/PdfPickerApp-1.0.0-x86_64.AppImage
-./dist_linux/PdfPickerApp-1.0.0-x86_64.AppImage
+chmod +x dist_linux/TDTool-1.0.0-x86_64.AppImage
+./dist_linux/TDTool-1.0.0-x86_64.AppImage
 ```
 
 **Інтеграція з робочим столом** (щоб з'явився в меню програм):
@@ -130,13 +130,13 @@ chmod +x dist_linux/PdfPickerApp-1.0.0-x86_64.AppImage
 ```bash
 # Скопіювати в зручне місце (наприклад ~/Applications)
 mkdir -p ~/Applications
-cp dist_linux/PdfPickerApp-1.0.0-x86_64.AppImage ~/Applications/
+cp dist_linux/TDTool-1.0.0-x86_64.AppImage ~/Applications/
 
 # Встановити desktop entry вручну
-cp linux/pdfpickerapp.desktop ~/.local/share/applications/
+cp linux/tdtool.desktop ~/.local/share/applications/
 # Виправити шлях у .desktop файлі:
-sed -i "s|Exec=pdfpickerapp|Exec=$HOME/Applications/PdfPickerApp-1.0.0-x86_64.AppImage|" \
-    ~/.local/share/applications/pdfpickerapp.desktop
+sed -i "s|Exec=tdtool|Exec=$HOME/Applications/TDTool-1.0.0-x86_64.AppImage|" \
+    ~/.local/share/applications/tdtool.desktop
 update-desktop-database ~/.local/share/applications/
 ```
 
@@ -146,16 +146,16 @@ update-desktop-database ~/.local/share/applications/
 
 ```bash
 # Встановити
-sudo dpkg -i dist_linux/pdfpickerapp_1.0.0_amd64.deb
+sudo dpkg -i dist_linux/tdtool_1.0.0_amd64.deb
 
 # Якщо dpkg повідомить про відсутні залежності:
 sudo apt install -f
 ```
 
 Після встановлення:
-- Команда `pdfpickerapp` доступна з терміналу
+- Команда `tdtool` доступна з терміналу
 - Запис з'являється в меню програм
-- PDF-файли можна відкривати через "Відкрити за допомогою → PdfPickerApp"
+- PDF-файли можна відкривати через "Відкрити за допомогою → TDTool"
 
 ---
 
@@ -163,10 +163,10 @@ sudo apt install -f
 
 ```bash
 # Fedora / RHEL
-sudo rpm -i dist_linux/pdfpickerapp-1.0.0-1.x86_64.rpm
+sudo rpm -i dist_linux/tdtool-1.0.0-1.x86_64.rpm
 
 # openSUSE
-sudo zypper install dist_linux/pdfpickerapp-1.0.0-1.x86_64.rpm
+sudo zypper install dist_linux/tdtool-1.0.0-1.x86_64.rpm
 ```
 
 ---
@@ -175,10 +175,10 @@ sudo zypper install dist_linux/pdfpickerapp-1.0.0-1.x86_64.rpm
 
 | Спосіб встановлення | Команда видалення |
 |---------------------|-------------------|
-| Запуск із джерела   | Просто видали папку `PdfPickerApp_linux/` |
-| AppImage            | Видали `.AppImage` файл і `~/.local/share/applications/pdfpickerapp.desktop` |
-| .deb                | `sudo apt remove pdfpickerapp` |
-| .rpm                | `sudo rpm -e pdfpickerapp` |
+| Запуск із джерела   | Просто видали папку `TDTool_linux/` |
+| AppImage            | Видали `.AppImage` файл і `~/.local/share/applications/tdtool.desktop` |
+| .deb                | `sudo apt remove tdtool` |
+| .rpm                | `sudo rpm -e tdtool` |
 
 ---
 
@@ -204,7 +204,7 @@ QT_QPA_PLATFORM=xcb python3 main.py
 ```
 Або додай у `.desktop` файл рядок:
 ```
-Exec=env QT_QPA_PLATFORM=xcb pdfpickerapp %f
+Exec=env QT_QPA_PLATFORM=xcb tdtool %f
 ```
 
 ### Помилка «libGL.so.1: cannot open shared object file»
@@ -228,7 +228,7 @@ sudo apt install libfuse2    # Ubuntu 22.04+
 ```
 Або запусти без FUSE:
 ```bash
-./PdfPickerApp-1.0.0-x86_64.AppImage --appimage-extract-and-run
+./TDTool-1.0.0-x86_64.AppImage --appimage-extract-and-run
 ```
 
 ---

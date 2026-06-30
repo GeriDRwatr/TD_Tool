@@ -47,7 +47,7 @@ class _MiniPreview(QtWidgets.QWidget):
         p.setFont(QtGui.QFont("", 8, QtGui.QFont.DemiBold))
         p.setPen(QtGui.QColor(255, 255, 255, 200))
         p.drawText(QtCore.QRect(7, 0, SW - 7, 34),
-                   QtCore.Qt.AlignVCenter, "☰  PdfPickerApp")
+                   QtCore.Qt.AlignVCenter, "☰  TDTool")
 
         p.setPen(QtGui.QPen(QtGui.QColor(t.bg_hover), 1))
         p.drawLine(0, 34, SW, 34)

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# PdfPickerApp — Linux packaging script
+# TDTool — Linux packaging script
 # Produces:
-#   dist_linux/PdfPickerApp-1.0.0-x86_64.AppImage   (universal)
-#   dist_linux/pdfpickerapp_1.0.0_amd64.deb          (Debian / Ubuntu / Mint)
-#   dist_linux/pdfpickerapp-1.0.0-1.x86_64.rpm       (Fedora / RHEL / openSUSE)
+#   dist_linux/TDTool-1.0.0-x86_64.AppImage   (universal)
+#   dist_linux/tdtool_1.0.0_amd64.deb          (Debian / Ubuntu / Mint)
+#   dist_linux/tdtool-1.0.0-1.x86_64.rpm       (Fedora / RHEL / openSUSE)
 #
 # Usage (run from the project root):
 #   bash linux/build.sh               # all formats
@@ -18,26 +18,26 @@
 #   sudo apt install dpkg fuse libfuse2 curl        # Debian/Ubuntu
 #   sudo dnf install rpm-build fuse fuse-libs curl  # Fedora/RHEL
 #
-# Optional — place a 256×256 PNG at linux/pdfpickerapp.png before running.
+# Optional — place a 256×256 PNG at linux/tdtool.png before running.
 # A solid-colour placeholder is auto-generated if the file is absent.
 # =============================================================================
 set -euo pipefail
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-APP_NAME="PdfPickerApp"
-APP_ID="pdfpickerapp"
+APP_NAME="TDTool"
+APP_ID="tdtool"
 VERSION="1.0.0"
 SUMMARY="PDF Viewer and Page Editor"
-LONG_DESC="PdfPickerApp lets you view PDFs and rearrange, split or merge pages
+LONG_DESC="TDTool lets you view PDFs and rearrange, split or merge pages
  into separate documents by assigning them to named groups."
-MAINTAINER="PdfPickerApp <noreply@example.com>"
-HOMEPAGE="https://github.com/example/pdfpickerapp"
+MAINTAINER="TDTool <noreply@example.com>"
+HOMEPAGE="https://github.com/example/tdtool"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$SCRIPT_DIR")"
 PYINST_OUT="$ROOT/dist/$APP_NAME"
 OUT="$ROOT/dist_linux"
-ICON_SRC="$SCRIPT_DIR/pdfpickerapp.png"
+ICON_SRC="$SCRIPT_DIR/tdtool.png"
 
 ARCH_RAW="$(uname -m)"                       # x86_64 | aarch64 | armv7l
 DEB_ARCH="${ARCH_RAW/x86_64/amd64}"
@@ -89,13 +89,13 @@ ok "Tools OK"
 # ── 2. PyInstaller ────────────────────────────────────────────────────────────
 step "Building with PyInstaller"
 cd "$ROOT"
-python3 -m PyInstaller linux/PdfPickerApp_linux.spec --noconfirm
+python3 -m PyInstaller linux/TDTool_linux.spec --noconfirm
 [[ -d "$PYINST_OUT" ]] || die "PyInstaller output not found at $PYINST_OUT"
 ok "PyInstaller → $PYINST_OUT"
 
 # ── 3. Icon ───────────────────────────────────────────────────────────────────
 if [[ ! -f "$ICON_SRC" ]]; then
-    warn "linux/pdfpickerapp.png not found — generating placeholder"
+    warn "linux/tdtool.png not found — generating placeholder"
     python3 <<PYEOF
 import struct, zlib, os
 
@@ -133,12 +133,12 @@ if $DO_APPIMAGE; then
     cp -r "$PYINST_OUT/." "$APPDIR/usr/bin/"
 
     # Desktop entry — AppImage spec requires it both at root AND in usr/share
-    cp "$SCRIPT_DIR/pdfpickerapp.desktop" "$APPDIR/"
-    cp "$SCRIPT_DIR/pdfpickerapp.desktop" "$APPDIR/usr/share/applications/"
+    cp "$SCRIPT_DIR/tdtool.desktop" "$APPDIR/"
+    cp "$SCRIPT_DIR/tdtool.desktop" "$APPDIR/usr/share/applications/"
 
     # Icon — same requirement (root + hicolor)
-    cp "$ICON_SRC" "$APPDIR/pdfpickerapp.png"
-    cp "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/256x256/apps/pdfpickerapp.png"
+    cp "$ICON_SRC" "$APPDIR/tdtool.png"
+    cp "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/256x256/apps/tdtool.png"
 
     # AppRun entry point
     cp "$SCRIPT_DIR/AppRun" "$APPDIR/AppRun"
@@ -177,7 +177,7 @@ if $DO_DEB; then
     # App files
     cp -r "$PYINST_OUT/." "$LIB_DIR/"
 
-    # Thin launcher in /usr/bin so users can type `pdfpickerapp` in a terminal
+    # Thin launcher in /usr/bin so users can type `tdtool` in a terminal
     cat > "$DEB_PKG/usr/bin/$APP_ID" <<SH
 #!/bin/sh
 exec /usr/lib/${APP_ID}/${APP_NAME} "\$@"
@@ -185,8 +185,8 @@ SH
     chmod +x "$DEB_PKG/usr/bin/$APP_ID"
 
     # Desktop entry + icon
-    cp "$SCRIPT_DIR/pdfpickerapp.desktop" "$DEB_PKG/usr/share/applications/"
-    cp "$ICON_SRC"                        "$DEB_PKG/usr/share/icons/hicolor/256x256/apps/pdfpickerapp.png"
+    cp "$SCRIPT_DIR/tdtool.desktop" "$DEB_PKG/usr/share/applications/"
+    cp "$ICON_SRC"                        "$DEB_PKG/usr/share/icons/hicolor/256x256/apps/tdtool.png"
 
     # MIME type declaration (registers PDF association for XDG)
     cat > "$DEB_PKG/usr/share/mime/packages/${APP_ID}.xml" <<XML
@@ -256,10 +256,10 @@ if $DO_RPM; then
     info "Source tarball: $TARBALL"
 
     # Also stage desktop + icon + MIME file alongside the tarball
-    cp "$SCRIPT_DIR/pdfpickerapp.desktop" "$RPM_ROOT/SOURCES/"
-    cp "$ICON_SRC"                        "$RPM_ROOT/SOURCES/pdfpickerapp.png"
+    cp "$SCRIPT_DIR/tdtool.desktop" "$RPM_ROOT/SOURCES/"
+    cp "$ICON_SRC"                        "$RPM_ROOT/SOURCES/tdtool.png"
 
-    cat > "$RPM_ROOT/SOURCES/pdfpickerapp-mime.xml" <<XML
+    cat > "$RPM_ROOT/SOURCES/tdtool-mime.xml" <<XML
 <?xml version="1.0" encoding="UTF-8"?>
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/pdf">
@@ -278,9 +278,9 @@ Summary:        ${SUMMARY}
 License:        Proprietary
 URL:            ${HOMEPAGE}
 Source0:        ${APP_ID}-${VERSION}.tar.gz
-Source1:        pdfpickerapp.desktop
-Source2:        pdfpickerapp.png
-Source3:        pdfpickerapp-mime.xml
+Source1:        tdtool.desktop
+Source2:        tdtool.png
+Source3:        tdtool-mime.xml
 
 Requires:       libGL, glib2, dbus-libs, libxcb, libxkbcommon
 
@@ -310,8 +310,8 @@ LAUNCHER
 chmod 755 %{buildroot}/usr/bin/${APP_ID}
 
 install -m 644 %{SOURCE1} %{buildroot}/usr/share/applications/
-install -m 644 %{SOURCE2} %{buildroot}/usr/share/icons/hicolor/256x256/apps/pdfpickerapp.png
-install -m 644 %{SOURCE3} %{buildroot}/usr/share/mime/packages/pdfpickerapp.xml
+install -m 644 %{SOURCE2} %{buildroot}/usr/share/icons/hicolor/256x256/apps/tdtool.png
+install -m 644 %{SOURCE3} %{buildroot}/usr/share/mime/packages/tdtool.xml
 
 %post
 update-desktop-database /usr/share/applications &>/dev/null || true
@@ -325,9 +325,9 @@ update-mime-database    /usr/share/mime         &>/dev/null || true
 %files
 /usr/lib/${APP_ID}/
 /usr/bin/${APP_ID}
-/usr/share/applications/pdfpickerapp.desktop
-/usr/share/icons/hicolor/256x256/apps/pdfpickerapp.png
-/usr/share/mime/packages/pdfpickerapp.xml
+/usr/share/applications/tdtool.desktop
+/usr/share/icons/hicolor/256x256/apps/tdtool.png
+/usr/share/mime/packages/tdtool.xml
 
 %changelog
 * $(date '+%a %b %d %Y') Build System <noreply@example.com> - ${VERSION}-1

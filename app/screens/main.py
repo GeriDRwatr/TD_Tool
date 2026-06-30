@@ -503,7 +503,7 @@ class ScreenMain(QtWidgets.QWidget):
         self._coming_soon     = {}
         self._theme_dividers: list[QtWidgets.QFrame] = []
 
-        self.setWindowTitle("PdfPickerApp")
+        self.setWindowTitle("TDTool")
         self.resize(1250, 720)
         self.setStyleSheet("background: #21232a;")
 
@@ -554,7 +554,7 @@ class ScreenMain(QtWidgets.QWidget):
         lay.setSpacing(0)
 
         # ── toggle / app name ─────────────────────────────────────────────────
-        self._toggle_btn = QtWidgets.QPushButton("☰   PdfPickerApp")
+        self._toggle_btn = QtWidgets.QPushButton("☰   TDTool")
         self._toggle_btn.setFixedHeight(56)
         self._toggle_btn.setCursor(QtCore.Qt.PointingHandCursor)
         self._toggle_btn.setFocusPolicy(QtCore.Qt.NoFocus)
@@ -903,7 +903,7 @@ class ScreenMain(QtWidgets.QWidget):
         self._anim.setEndValue(target)
         self._anim.start()
 
-        self._toggle_btn.setText("☰" if self._collapsed else "☰   PdfPickerApp")
+        self._toggle_btn.setText("☰" if self._collapsed else "☰   TDTool")
         for btn in self._nav_btns.values():
             btn.set_collapsed(self._collapsed)
         self._help_btn.set_collapsed(self._collapsed)

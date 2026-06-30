@@ -3,7 +3,7 @@ import sys
 
 def register_as_pdf_viewer() -> None:
     """
-    Register PdfPickerApp in HKCU so it appears in the Windows
+    Register TDTool in HKCU so it appears in the Windows
     'Open with' context menu for .pdf files.
     Runs silently; errors are swallowed so the app always starts.
     Only active when running as a frozen .exe (PyInstaller build).
@@ -13,7 +13,7 @@ def register_as_pdf_viewer() -> None:
     try:
         import winreg
         exe      = sys.executable
-        prog_id  = "PdfPickerApp.PDF"
+        prog_id  = "TDTool.PDF"
         open_cmd = f'"{exe}" "%1"'
         cu       = winreg.HKEY_CURRENT_USER
 
@@ -27,19 +27,19 @@ def register_as_pdf_viewer() -> None:
         _set(rf"Software\Classes\{prog_id}\DefaultIcon",
              "", f"{exe},0")
         _set(rf"Software\Classes\{prog_id}\shell\open",
-             "FriendlyAppName", "PdfPickerApp")
+             "FriendlyAppName", "TDTool")
         _set(rf"Software\Classes\{prog_id}\shell\open\command",
              "", open_cmd)
         _set(rf"Software\Classes\.pdf\OpenWithProgids",
              prog_id, b"", winreg.REG_NONE)
-        _set(r"Software\PdfPickerApp\Capabilities",
-             "ApplicationName", "PdfPickerApp")
-        _set(r"Software\PdfPickerApp\Capabilities",
+        _set(r"Software\TDTool\Capabilities",
+             "ApplicationName", "TDTool")
+        _set(r"Software\TDTool\Capabilities",
              "ApplicationDescription", "PDF Viewer & Editor")
-        _set(r"Software\PdfPickerApp\Capabilities\FileAssociations",
+        _set(r"Software\TDTool\Capabilities\FileAssociations",
              ".pdf", prog_id)
         _set(r"Software\RegisteredApplications",
-             "PdfPickerApp", r"Software\PdfPickerApp\Capabilities")
+             "TDTool", r"Software\TDTool\Capabilities")
 
         # Notify the shell so the change appears immediately
         import ctypes

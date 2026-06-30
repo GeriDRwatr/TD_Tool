@@ -1,4 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
+# PyInstaller spec for Linux.  Run from the project root:
+#   python -m PyInstaller linux/TDTool_linux.spec --noconfirm
+import os
+
+ROOT = os.path.dirname(SPECPATH)   # project root  (spec lives in linux/)
 
 excluded = [
     'PySide6.Qt3DAnimation', 'PySide6.Qt3DCore', 'PySide6.Qt3DExtras',
@@ -18,13 +23,24 @@ excluded = [
     'matplotlib', 'numpy', 'scipy', 'PIL', 'cv2',
     'email', 'http', 'urllib', 'xml', 'xmlrpc',
     'unittest', 'doctest', 'pdb',
+    # Windows-only — safe to exclude on Linux
+    'winreg', 'win32api', 'win32con', 'win32gui',
+    'pywin32', 'pywin32_ctypes', 'pywintypes',
+    'ctypes.wintypes',
 ]
 
+# theme.json must be bundled: theme.py resolves it relative to __file__
+# window_state.json is created at runtime — not bundled
+_datas = []
+_theme_json = os.path.join(ROOT, 'theme.json')
+if os.path.exists(_theme_json):
+    _datas.append((_theme_json, '.'))
+
 a = Analysis(
-    ['main.py'],
-    pathex=['.'],
+    [os.path.join(ROOT, 'main.py')],
+    pathex=[ROOT],
     binaries=[],
-    datas=[('app/theme.json', 'app')],
+    datas=_datas,
     hiddenimports=[
         'PySide6.QtWidgets',
         'PySide6.QtCore',
@@ -46,10 +62,10 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='PdfPickerApp',
+    name='TDTool',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=True,   # strip debug symbols — safe on Linux, reduces binary ~30 %
     upx=False,
     console=False,
     disable_windowed_traceback=False,
@@ -64,7 +80,7 @@ coll = COLLECT(
     a.binaries,
     a.zipfiles,
     a.datas,
-    strip=False,
+    strip=True,
     upx=False,
-    name='PdfPickerApp',
+    name='TDTool',
 )

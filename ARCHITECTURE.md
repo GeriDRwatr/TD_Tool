@@ -1,4 +1,4 @@
-# PdfPickerApp — Architecture Reference
+# TDTool — Architecture Reference
 
 Stack: **PySide6 + PyMuPDF (fitz)**. All UI custom-painted (paintEvent). No Qt Designer / .ui files.
 
@@ -28,9 +28,9 @@ Stack: **PySide6 + PyMuPDF (fitz)**. All UI custom-painted (paintEvent). No Qt D
 | File | Purpose |
 |---|---|
 | `linux/build.sh` | PyInstaller → AppImage / .deb / .rpm |
-| `linux/PdfPickerApp_linux.spec` | PyInstaller spec (excludes winreg/pywin32) |
+| `linux/TDTool_linux.spec` | PyInstaller spec (excludes winreg/pywin32) |
 | `linux/AppRun` | AppImage entry; sets `LD_LIBRARY_PATH`, `QT_QPA_PLATFORM_PLUGIN_PATH` |
-| `linux/pdfpickerapp.desktop` | XDG desktop; registers `application/pdf` MIME |
+| `linux/tdtool.desktop` | XDG desktop; registers `application/pdf` MIME |
 
 ---
 
@@ -40,7 +40,7 @@ Stack: **PySide6 + PyMuPDF (fitz)**. All UI custom-painted (paintEvent). No Qt D
 ScreenMain (QWidget)
 │
 ├── _sidebar  QFrame  (left, 210px expanded / 62px collapsed)
-│   ├── _toggle_btn "☰  PdfPickerApp"         → _toggle_sidebar()
+│   ├── _toggle_btn "☰  TDTool"         → _toggle_sidebar()
 │   ├── _left_panel  DrillDownPanel(on_folder_open=_expand_sidebar)
 │   │   ├── NavButton "PDF"  [folder]          → push sub-page + _expand_sidebar()
 │   │   │   sub-page:
@@ -514,11 +514,11 @@ DraggableCard  (cell_w × thumb_h+60)
 ### Windows
 
 ```
-PyInstaller:  venv\Scripts\pyinstaller PdfPickerApp.spec --clean
-              → dist\PdfPickerApp\PdfPickerApp.exe  (onedir)
+PyInstaller:  venv\Scripts\pyinstaller TDTool.spec --clean
+              → dist\TDTool\TDTool.exe  (onedir)
 
 Inno Setup:   ISCC.exe installer.iss
-              → installer_output\PdfPickerApp_Setup_v1.0.exe
+              → installer_output\TDTool_Setup_v1.0.exe
 
 win_register.py: runs only when frozen (sys.frozen) on win32
 ```
@@ -527,13 +527,13 @@ win_register.py: runs only when frozen (sys.frozen) on win32
 
 ```
 bash linux/build.sh [--appimage] [--deb] [--rpm]   (default: all three)
-  → dist_linux/PdfPickerApp-1.0.0-x86_64.AppImage
-  → dist_linux/pdfpickerapp_1.0.0_amd64.deb
-  → dist_linux/pdfpickerapp-1.0.0-1.x86_64.rpm
+  → dist_linux/TDTool-1.0.0-x86_64.AppImage
+  → dist_linux/tdtool_1.0.0_amd64.deb
+  → dist_linux/tdtool-1.0.0-1.x86_64.rpm
 
 AppDir/
 ├── AppRun    sets LD_LIBRARY_PATH + QT_QPA_PLATFORM_PLUGIN_PATH
-├── pdfpickerapp.desktop
-├── pdfpickerapp.png
+├── tdtool.desktop
+├── tdtool.png
 └── usr/bin/  PyInstaller onedir output
 ```
