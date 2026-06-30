@@ -11,17 +11,18 @@ Stack: **PySide6 + PyMuPDF (fitz)**. All UI custom-painted (paintEvent). No Qt D
 | `main.py` | `QApplication` (style=Fusion) → `ScreenMain`; handles CLI PDF arg |
 | `app/theme.py` | `Theme` dataclass · `ThemeManager` · `THEME_MGR` singleton |
 | `app/constants.py` | `group_color(n)` reads THEME_MGR; fixed color constants |
-| `app/icons.py` | `draw(p,rect,name,color)` · `sf_font(px,w)` — stroke from THEME_MGR |
 | `app/pdf_utils.py` | `clear_layout` · `safe_thumbnail_render` |
-| `app/widgets.py` | All reusable thumbnail/card widgets (see Widgets section) |
-| `app/screens/main.py` | `ScreenMain` · `DropZone` · `NavButton` · `DrillDownPanel` · `ComingSoonWidget` |
+| `app/platform.py` | `register_as_pdf_viewer()` · `set_title_bar_color()` — Windows-only; no-op elsewhere |
+| `app/ui/icons/` | **Python package** — unified icon renderer: `draw(p,rect,name,color)` auto-selects Lucide SVG or hand-drawn vector; `sf_font(px,w)` |
+| `app/ui/icons/svg/` | 24 Lucide SVG files bundled with the package |
+| `app/ui/widgets.py` | All reusable thumbnail/card widgets (see Widgets section) |
+| `app/screens/window.py` | `ScreenMain` · `DropZone` · `NavButton` · `DrillDownPanel` · `ComingSoonWidget` |
 | `app/screens/merge.py` | `ScreenMergeMulti` — split/merge editor |
 | `app/screens/viewer.py` | `ScreenViewer` · `PageWidget` · `_ThumbnailPanel` · `_TocPanel` · `_SearchBox` · `PdfViewerTabs` · `_FileTabBar` |
 | `app/screens/settings.py` | `ScreenSettings` · `_MiniPreview` — live theme editor (not wired into `ScreenMain` yet) |
-| `app/word_editor.py` | `WordEditor` — embedded .docx editor (workspace screen) |
-| `app/win_register.py` | `register_as_pdf_viewer()` · `set_title_bar_color()` — Windows-only; no-op elsewhere |
-| `theme.json` | Saved theme overrides (created on first save) |
-| `window_state.json` | Saved window size |
+| `app/screens/word_editor.py` | `WordEditor` — embedded .docx editor (workspace screen) |
+| `app/theme.json` | Saved theme overrides — runtime, gitignored |
+| `window_state.json` | Saved window size — runtime, gitignored |
 
 ### Linux packaging (`linux/`)
 
@@ -34,7 +35,7 @@ Stack: **PySide6 + PyMuPDF (fitz)**. All UI custom-painted (paintEvent). No Qt D
 
 ---
 
-## Screen Layout (app/screens/main.py)
+## Screen Layout (app/screens/window.py)
 
 No left sidebar. The app starts on one universal drop zone; format is detected
 from the dropped file's extension, and the right sidebar becomes a format-aware
@@ -211,7 +212,7 @@ _push(idx):
 
 ---
 
-## Word Editor (app/word_editor.py)
+## Word Editor (app/screens/word_editor.py)
 
 ```
 WordEditor (QWidget)           # workspace screen, not a dialog
@@ -496,7 +497,7 @@ ScreenSettings
 
 ---
 
-## Icons (app/icons.py)
+## Icons (app/ui/icons/)
 
 ```python
 _ICON_NAMES = {scissors, merge, rotate, compress_layers, gear,
@@ -640,7 +641,7 @@ group_color(n):   # reads THEME_MGR.get().group_color_{n-1}  (live-updating)
 
 ---
 
-## Widgets (app/widgets.py)
+## Widgets (app/ui/widgets.py)
 
 | Class | Purpose |
 |---|---|
