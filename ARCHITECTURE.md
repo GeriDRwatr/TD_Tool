@@ -16,7 +16,7 @@ Stack: **PySide6 + PyMuPDF (fitz)**. All UI custom-painted (paintEvent). No Qt D
 | `app/widgets.py` | All reusable thumbnail/card widgets (see Widgets section) |
 | `app/screens/main.py` | `ScreenMain` · `DropZone` · `NavButton` · `DrillDownPanel` · `ComingSoonWidget` |
 | `app/screens/merge.py` | `ScreenMergeMulti` — split/merge editor |
-| `app/screens/viewer.py` | `ScreenViewer` · `PageWidget` · `PdfViewerTabs` · `_FileTabBar` |
+| `app/screens/viewer.py` | `ScreenViewer` · `PageWidget` · `_ThumbnailPanel` · `_TocPanel` · `_SearchBox` · `PdfViewerTabs` · `_FileTabBar` |
 | `app/screens/settings.py` | `ScreenSettings` · `_MiniPreview` — live theme editor (not wired into `ScreenMain` yet) |
 | `app/word_editor.py` | `WordEditor` — embedded .docx editor (workspace screen) |
 | `app/win_register.py` | `register_as_pdf_viewer()` · `set_title_bar_color()` — Windows-only; no-op elsewhere |
@@ -362,34 +362,110 @@ Registered listeners: `ScreenMain._apply_theme` (also calls `set_title_bar_color
 
 ```
 ScreenViewer (QWidget)
-├── QScrollArea (_scroll)       bg: viewer_bg
-│   └── _container QWidget
-│       └── _vbox QVBoxLayout
-│           └── PageWidget × N
-└── _status_bar QWidget (28px)
-    ├── _lbl_file   (stretch 1)    "filename.pdf"
-    ├── _lbl_pages  (52px center)  "3/9"
-    └── _lbl_cursor (130px right)  "x 123.4  y 456.7 pt"
+├── body  QHBoxLayout
+│   ├── _side_panel  QWidget (168px, hidden until toggled)
+│   │   ├── _side_header   QWidget (44px) — current file name only, no buttons
+│   │   └── _side_stack    QStackedWidget
+│   │       ├── [0] _thumb_panel  _ThumbnailPanel (QScrollArea)
+│   │       └── [1] _toc_panel    _TocPanel (QTreeWidget) — doc.get_toc()
+│   └── right  QVBoxLayout                       — sits over the WORK AREA only,
+│       ├── _toolbar  QWidget (44px)                NOT above _side_panel
+│       │   ├── _thumb_toggle_btn  _ToolbarButton("sidebar", chevron=True)
+│       │   │     left-click  → _toggle_thumbnails()         (show/hide thumbnails)
+│       │   │     right-click → _show_sidebar_menu()  QMenu  (sidebar mode + page mode)
+│       │   ├── zoom_out_btn / _lbl_zoom / zoom_in_btn
+│       │   └── _search_box  _SearchBox  (QLineEdit + magnifying-glass icon)
+│       ├── _toolbar_divider  QFrame (1px)
+│       ├── QScrollArea (_scroll)       bg: viewer_bg
+│       │   └── _container QWidget → _vbox QVBoxLayout → PageWidget × N
+│       │       (or row-wrapper QWidget × N/2 in "two" page mode — see below)
+│       └── _status_bar QWidget (28px)
+│           ├── _lbl_file   (stretch 1)    "filename.pdf"
+│           ├── _lbl_pages  (52px center)  "3/9"
+│           └── _lbl_cursor (130px right)  "x 123.4  y 456.7 pt"
 ```
 
-`close_doc()` — releases `_doc`/`_pages` and closes the fitz handle; called by
-`PdfViewerTabs` before deleting a tab's viewer (on close or `reset()`), so the
-native PDF handle doesn't leak.
+`close_doc()` — releases `_doc`/`_pages`, clears `_thumb_panel`/`_toc_panel`/
+search state, and closes the fitz handle; called by `PdfViewerTabs` before
+deleting a tab's viewer (on close or `reset()`), so the native PDF handle
+doesn't leak.
+
+### Sidebar menu (right-click on `_thumb_toggle_btn`)
+
+```
+Мініатюри / Зміст         checkable, switch _side_stack content + show panel
+Виділення та нотатки /
+Закладки / Індексний аркуш   disabled — no backing storage subsystem exists yet
+─────────────────────────
+Неперервне прокручування / Окрема сторінка / Дві сторінки
+                           checkable → _set_page_mode("continuous"|"single"|"two")
+```
+No "hide sidebar" entry — left-click on the same button already toggles it.
+
+### Page layout modes (`_page_mode`)
+
+```
+_rebuild_page_layout()   re-parents existing PageWidgets into _vbox without
+                          destroying them:
+  "continuous" / "single"   each PageWidget added directly to _vbox
+  "two"                     paired into QWidget row wrappers (QHBoxLayout), 2/row
+  _apply_page_visibility()  "single" → only _pages[_current_page] visible
+                             else     → all visible
+
+_scroll_anchor(i)        the widget whose .pos().y() drives scrolling for
+                          page i — the PageWidget itself, or its row wrapper
+                          in "two" mode (pw.parentWidget() is not _container)
+
+_go_to_page(i)           "single" → just flips visibility + labels (no scroll)
+                          else     → scrolls to _scroll_anchor(i).pos().y()
+
+_update_current_page()   skipped entirely in "single" mode (no meaningful
+                          scroll position); dedupes by anchor identity so a
+                          "two" mode pair isn't counted twice
+```
 
 ### PageWidget
 
 ```
-_render()     fitz.Matrix(scale) → QPixmap
-_load_words() get_text("words") → rects in screen coords
+_render()     fitz.Matrix(scale * dpr) → QImage.setDevicePixelRatio(dpr) → QPixmap
+              dpr = devicePixelRatioF() (HiDPI/Retina-sharp; logical widget
+              size = pixmap.deviceIndependentSize(), NOT pixmap.size())
+              all coordinate math (words/selection/search/cursor) uses
+              self._logical_w/_logical_h, never pixmap.width()/height()
+_load_words() get_text("words") → (rect, text, block_no, line_no) in screen coords
+              block_no/line_no kept for line/paragraph selection grouping
 
 paintEvent:
   drawPixmap
   highlighted words  → fillRect QColor(selection_color, alpha=90)
   rubber-band rect   → QPen(selection_color, alpha=160) + fill alpha=28
+  search hits        → fillRect (255,213,0,95); current hit → orange outline+fill
 
-Ctrl+Wheel → eventFilter → _zoom_in/_zoom_out
+Click counting (_register_click via QElapsedTimer + doubleClickInterval()):
+  2 clicks → _select_word()       3 clicks → _select_line() (same block+line)
+  4+ clicks → _select_paragraph() (same block_no, all lines, "\n"-joined)
+  Qt quirk: the 2nd physical click arrives as mouseDoubleClickEvent (not
+  mousePressEvent), so both handlers route through _apply_click_selection().
+
+set_search_highlights(hits_pdf, current_pdf)  — rects stored in PDF-point
+  space, re-projected to widget space on every _render() (so they survive zoom)
+
+Ctrl+Wheel / pinch (QEvent.NativeGesture, Qt.ZoomNativeGesture) →
+  eventFilter on _scroll.viewport() → _zoom_in/_zoom_out/_apply_scale()
 mouseMoveEvent → cursor_moved signal → _lbl_cursor
 leaveEvent → cursor_left signal → clears _lbl_cursor
+```
+
+### Search (`_run_search` / `_search_*`)
+
+```python
+_search_page_ci(page, query):
+  # page.search_for() is case-sensitive for non-ASCII (Cyrillic) text —
+  # query {query, .lower(), .upper(), .capitalize()} and dedupe by rounded rect
+_run_search(query)        → rebuilds _search_results [(page_i, (x0,y0,x1,y1))]
+                             jumps to first hit; empty query just clears highlights
+_search_next/_prev()      → cyclic _go_to_search_result(idx)
+Enter / Shift+Enter in _SearchField → next/prev; Esc → clear
 ```
 
 ### Print
@@ -425,7 +501,8 @@ ScreenSettings
 ```python
 _ICON_NAMES = {scissors, merge, rotate, compress_layers, gear,
                plus_circle, play, arrow_left, arrow_up,
-               checkmark, xmark, eye, save, printer}
+               checkmark, xmark, eye, save, printer,
+               sidebar, search}
 
 draw(p, rect, name, color):
   lw = max(1.5, min(rect) * THEME_MGR.get().icon_stroke)

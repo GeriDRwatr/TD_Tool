@@ -5,7 +5,7 @@ from .theme import THEME_MGR
 _ICON_NAMES = frozenset([
     "scissors", "merge", "rotate", "compress_layers", "gear",
     "plus_circle", "play", "arrow_left", "arrow_up", "checkmark", "xmark", "eye", "save",
-    "printer",
+    "printer", "sidebar", "search",
 ])
 
 _SF_FAMILY = None
@@ -273,5 +273,28 @@ def draw(p: QtGui.QPainter, rect: QtCore.QRectF,
         p.setBrush(color)
         p.setPen(QtCore.Qt.NoPen)
         p.drawEllipse(QtCore.QPointF(cx, cy), r_p, r_p)
+
+    elif name == "sidebar":
+        # SF "sidebar.left": rounded rect outline + vertical divider near the left
+        w  = s * 0.62
+        h  = s * 0.50
+        rx = cx - w / 2
+        ry = cy - h / 2
+        rect = QtCore.QRectF(rx, ry, w, h)
+        p.drawRoundedRect(rect, 3, 3)
+        dx = rx + w * 0.34
+        p.drawLine(QtCore.QPointF(dx, ry), QtCore.QPointF(dx, ry + h))
+
+    elif name == "search":
+        # SF "magnifyingglass": circle + diagonal handle
+        r   = s * 0.225
+        gcx = cx - s * 0.065
+        gcy = cy - s * 0.065
+        p.drawEllipse(QtCore.QPointF(gcx, gcy), r, r)
+        hx0 = gcx + r * 0.74
+        hy0 = gcy + r * 0.74
+        hx1 = cx + s * 0.30
+        hy1 = cy + s * 0.30
+        p.drawLine(QtCore.QPointF(hx0, hy0), QtCore.QPointF(hx1, hy1))
 
     p.restore()

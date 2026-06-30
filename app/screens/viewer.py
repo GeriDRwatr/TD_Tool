@@ -4,6 +4,7 @@ from PySide6 import QtWidgets, QtCore, QtGui
 from ..theme import THEME_MGR
 from .. import icons as _icons
 from ..widgets import _HoverMixin
+from ..pdf_utils import safe_thumbnail_render
 
 
 class _FirstPageButton(_HoverMixin, QtWidgets.QAbstractButton):
@@ -61,40 +62,86 @@ class PageWidget(QtWidgets.QWidget):
         self._page_num      = page_num
         self._page          = page
         self._scale         = scale
-        self._pixmap:       QtGui.QPixmap | None            = None
-        self._words:        list[tuple[QtCore.QRectF, str]] = []
+        self._pixmap:       QtGui.QPixmap | None                       = None
+        self._words:        list[tuple[QtCore.QRectF, str, int, int]] = []
         self._sel_start:    QtCore.QPointF | None           = None
         self._sel_end:      QtCore.QPointF | None           = None
         self._highlighted:  list[QtCore.QRectF]             = []
         self._selected_text = ""
+        self._click_count   = 0
+        self._click_timer   = QtCore.QElapsedTimer()
+        self._last_click_pos = QtCore.QPoint()
+        self._search_hits_pdf:       list[tuple[float, float, float, float]] = []
+        self._search_current_pdf:    tuple[float, float, float, float] | None = None
+        self._search_hits_widget:    list[QtCore.QRectF] = []
+        self._search_current_widget: QtCore.QRectF | None = None
+        self._logical_w = 0.0
+        self._logical_h = 0.0
         self.setCursor(QtCore.Qt.IBeamCursor)
         self.setMouseTracking(True)
         self._render()
 
     # ── rendering ─────────────────────────────────────────────────────────────
 
+    def _device_pixel_ratio(self) -> float:
+        dpr = self.devicePixelRatioF()
+        if dpr > 0:
+            return dpr
+        screen = QtWidgets.QApplication.primaryScreen()
+        return screen.devicePixelRatio() if screen else 1.0
+
     def _render(self):
-        mat = fitz.Matrix(self._scale, self._scale)
+        dpr = self._device_pixel_ratio()
+        mat = fitz.Matrix(self._scale * dpr, self._scale * dpr)
         pix = self._page.get_pixmap(matrix=mat, alpha=False)
         img = QtGui.QImage(pix.samples, pix.width, pix.height,
                            pix.stride, QtGui.QImage.Format_RGB888)
+        img.setDevicePixelRatio(dpr)
         self._pixmap = QtGui.QPixmap.fromImage(img)
-        self.setFixedSize(self._pixmap.size())
+        logical = self._pixmap.deviceIndependentSize().toSize()
+        self._logical_w = float(logical.width())
+        self._logical_h = float(logical.height())
+        self.setFixedSize(logical)
         self._load_words()
+        self._recompute_search_widget_rects()
+
+    def _pdf_rect_to_widget(self, rect: tuple[float, float, float, float]) -> QtCore.QRectF:
+        x0, y0, x1, y1 = rect
+        pr = self._page.rect
+        pw = max(pr.width, 1.0)
+        ph = max(pr.height, 1.0)
+        sw = self._logical_w
+        sh = self._logical_h
+        return QtCore.QRectF(x0 / pw * sw, y0 / ph * sh,
+                             (x1 - x0) / pw * sw, (y1 - y0) / ph * sh)
+
+    def _recompute_search_widget_rects(self):
+        self._search_hits_widget = [self._pdf_rect_to_widget(r) for r in self._search_hits_pdf]
+        self._search_current_widget = (
+            self._pdf_rect_to_widget(self._search_current_pdf)
+            if self._search_current_pdf else None
+        )
+
+    def set_search_highlights(self, hits_pdf: list[tuple[float, float, float, float]],
+                              current_pdf: tuple[float, float, float, float] | None = None):
+        self._search_hits_pdf    = hits_pdf
+        self._search_current_pdf = current_pdf
+        self._recompute_search_widget_rects()
+        self.update()
 
     def _load_words(self):
         self._words.clear()
         pr = self._page.rect
         pw = max(pr.width, 1.0)
         ph = max(pr.height, 1.0)
-        sw = float(self._pixmap.width())
-        sh = float(self._pixmap.height())
+        sw = self._logical_w
+        sh = self._logical_h
         for w in self._page.get_text("words"):
-            x0, y0, x1, y1, text = w[0], w[1], w[2], w[3], w[4]
+            x0, y0, x1, y1, text, block_no, line_no = w[0], w[1], w[2], w[3], w[4], w[5], w[6]
             self._words.append((
                 QtCore.QRectF(x0 / pw * sw, y0 / ph * sh,
                               (x1 - x0) / pw * sw, (y1 - y0) / ph * sh),
-                text,
+                text, block_no, line_no,
             ))
 
     def rescale(self, scale: float):
@@ -129,19 +176,92 @@ class PageWidget(QtWidgets.QWidget):
             self._selected_text = ""
             return
         rb   = QtCore.QRectF(self._sel_start, self._sel_end).normalized()
-        hits = [(r, t) for r, t in self._words if r.intersects(rb)]
+        hits = [(r, t) for r, t, _b, _l in self._words if r.intersects(rb)]
         hits.sort(key=lambda x: (round(x[0].top(), 1), x[0].left()))
         self._highlighted   = [r for r, _ in hits]
         self._selected_text = " ".join(t for _, t in hits)
 
+    def _select_word(self, pos: QtCore.QPointF):
+        for rect, text, _b, _l in self._words:
+            if rect.contains(pos):
+                self._sel_start     = QtCore.QPointF(rect.topLeft())
+                self._sel_end       = QtCore.QPointF(rect.bottomRight())
+                self._highlighted   = [rect]
+                self._selected_text = text
+                return
+        self.clear_selection()
+
+    def _select_line(self, pos: QtCore.QPointF):
+        for rect, _text, block_no, line_no in self._words:
+            if rect.contains(pos):
+                line = [(r, t) for r, t, b, l in self._words
+                        if b == block_no and l == line_no]
+                line.sort(key=lambda x: x[0].left())
+                self._highlighted   = [r for r, _ in line]
+                self._selected_text = " ".join(t for _, t in line)
+                xs0 = min(r.left()   for r, _ in line)
+                ys0 = min(r.top()    for r, _ in line)
+                xs1 = max(r.right()  for r, _ in line)
+                ys1 = max(r.bottom() for r, _ in line)
+                self._sel_start = QtCore.QPointF(xs0, ys0)
+                self._sel_end   = QtCore.QPointF(xs1, ys1)
+                return
+        self.clear_selection()
+
+    def _select_paragraph(self, pos: QtCore.QPointF):
+        for rect, _text, block_no, _line_no in self._words:
+            if rect.contains(pos):
+                block = [(r, t, l) for r, t, b, l in self._words if b == block_no]
+                lines: dict[int, list[tuple[QtCore.QRectF, str]]] = {}
+                for r, t, l in block:
+                    lines.setdefault(l, []).append((r, t))
+                text_lines = []
+                highlighted = []
+                for line_no in sorted(lines):
+                    line = sorted(lines[line_no], key=lambda x: x[0].left())
+                    highlighted.extend(r for r, _ in line)
+                    text_lines.append(" ".join(t for _, t in line))
+                self._highlighted   = highlighted
+                self._selected_text = "\n".join(text_lines)
+                self._sel_start = QtCore.QPointF(
+                    min(r.left() for r in highlighted), min(r.top() for r in highlighted))
+                self._sel_end = QtCore.QPointF(
+                    max(r.right() for r in highlighted), max(r.bottom() for r in highlighted))
+                return
+        self.clear_selection()
+
+    def _apply_click_selection(self, count: int, pos: QtCore.QPointF):
+        if count >= 4:
+            self._select_paragraph(pos)
+        elif count == 3:
+            self._select_line(pos)
+        elif count == 2:
+            self._select_word(pos)
+        else:
+            self._sel_start     = pos
+            self._sel_end       = pos
+            self._highlighted.clear()
+            self._selected_text = ""
+
+    def _register_click(self, pos: QtCore.QPoint) -> int:
+        interval   = QtWidgets.QApplication.doubleClickInterval()
+        same_spot  = (pos - self._last_click_pos).manhattanLength() <= 4
+        if self._click_timer.isValid() and self._click_timer.elapsed() <= interval and same_spot:
+            self._click_count += 1
+        else:
+            self._click_count = 1
+        self._click_timer.restart()
+        self._last_click_pos = pos
+        return self._click_count
+
     # ── cursor → PDF coordinates ───────────────────────────────────────────────
 
     def _emit_cursor(self, pos: QtCore.QPoint):
-        if not self._pixmap:
+        if not self._pixmap or self._logical_w <= 0 or self._logical_h <= 0:
             return
         pr   = self._page.rect
-        pdf_x = pos.x() / float(self._pixmap.width())  * pr.width
-        pdf_y = pos.y() / float(self._pixmap.height()) * pr.height
+        pdf_x = pos.x() / self._logical_w * pr.width
+        pdf_y = pos.y() / self._logical_h * pr.height
         self.cursor_moved.emit(self._page_num, pdf_x, pdf_y)
 
     # ── events ────────────────────────────────────────────────────────────────
@@ -149,26 +269,34 @@ class PageWidget(QtWidgets.QWidget):
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.LeftButton:
             self.page_clicked.emit(self)
-            self._sel_start     = QtCore.QPointF(event.pos())
-            self._sel_end       = self._sel_start
-            self._highlighted.clear()
-            self._selected_text = ""
+            count = self._register_click(event.pos())
+            self._apply_click_selection(count, QtCore.QPointF(event.pos()))
             self.update()
 
     def mouseMoveEvent(self, event):
         self._emit_cursor(event.pos())
-        if event.buttons() & QtCore.Qt.LeftButton and self._sel_start is not None:
+        if (event.buttons() & QtCore.Qt.LeftButton and self._sel_start is not None
+                and self._click_count <= 1):
             self._sel_end = QtCore.QPointF(event.pos())
             self._update_highlight()
             self.update()
 
     def mouseReleaseEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton and self._sel_start is not None:
+        if (event.button() == QtCore.Qt.LeftButton and self._sel_start is not None
+                and self._click_count <= 1):
             self._sel_end = QtCore.QPointF(event.pos())
             self._update_highlight()
             if self._selected_text:
                 QtWidgets.QApplication.clipboard().setText(self._selected_text)
             self.update()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() != QtCore.Qt.LeftButton:
+            return
+        self.page_clicked.emit(self)
+        count = self._register_click(event.pos())
+        self._apply_click_selection(count, QtCore.QPointF(event.pos()))
+        self.update()
 
     def leaveEvent(self, event):
         self.cursor_left.emit()
@@ -192,7 +320,342 @@ class PageWidget(QtWidgets.QWidget):
             sel_c.setAlpha(28)
             p.setBrush(sel_c)
             p.drawRect(rb)
+        if self._search_hits_widget:
+            p.setPen(QtCore.Qt.NoPen)
+            hit_c = QtGui.QColor(255, 213, 0, 95)
+            p.setBrush(hit_c)
+            for rect in self._search_hits_widget:
+                p.drawRect(rect)
+        if self._search_current_widget is not None:
+            p.setPen(QtGui.QPen(QtGui.QColor(255, 140, 0, 220), 1.6))
+            p.setBrush(QtGui.QColor(255, 160, 0, 110))
+            p.drawRect(self._search_current_widget)
         p.end()
+
+
+# ── Toolbar button (icon or text glyph) ─────────────────────────────────────────
+
+class _ToolbarButton(_HoverMixin, QtWidgets.QAbstractButton):
+    """Flat square button for the viewer's top toolbar — draws a vector icon
+    (icons.draw) or a short text glyph ('−' / '+'). Right-click emits
+    right_clicked instead of the normal press/click handling."""
+
+    right_clicked = QtCore.Signal()
+
+    def __init__(self, content: str, is_icon: bool = True, chevron: bool = False, parent=None):
+        super().__init__(parent)
+        self._content = content
+        self._is_icon = is_icon
+        self._chevron = chevron
+        self.setFixedSize(46 if chevron else 32, 32)
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._init_hover()
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.RightButton:
+            self.right_clicked.emit()
+            return
+        super().mousePressEvent(event)
+
+    def paintEvent(self, event):
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        t = THEME_MGR.get()
+        r = self.rect()
+
+        if self._hover:
+            bg = QtGui.QColor(t.nav_hover_bg)
+            bg.setAlpha(t.nav_hover_bg_alpha)
+            p.setPen(QtCore.Qt.NoPen)
+            p.setBrush(bg)
+            p.drawRoundedRect(r.adjusted(2, 2, -2, -2), 7, 7)
+
+        color = QtGui.QColor(t.nav_icon_inactive_color)
+        color.setAlpha(t.nav_icon_active_alpha if self._hover else t.nav_icon_inactive_alpha)
+        icon_cx = (r.center().x() - 6) if self._chevron else r.center().x()
+        if self._is_icon:
+            sz = t.icon_size
+            icon_r = QtCore.QRectF(icon_cx - sz / 2, r.center().y() - sz / 2, sz, sz)
+            _icons.draw(p, icon_r, self._content, color)
+        else:
+            p.setFont(_icons.sf_font(17, QtGui.QFont.DemiBold))
+            p.setPen(color)
+            p.drawText(QtCore.QRect(0, 0, r.width() - (12 if self._chevron else 0), r.height()),
+                       QtCore.Qt.AlignCenter, self._content)
+
+        if self._chevron:
+            chx = r.right() - 12
+            chy = r.center().y()
+            cw  = 3.2
+            pen = QtGui.QPen(color, 1.4, QtCore.Qt.SolidLine,
+                             QtCore.Qt.RoundCap, QtCore.Qt.RoundJoin)
+            p.setPen(pen)
+            p.drawLine(QtCore.QPointF(chx - cw, chy - cw * 0.6), QtCore.QPointF(chx, chy + cw * 0.6))
+            p.drawLine(QtCore.QPointF(chx, chy + cw * 0.6), QtCore.QPointF(chx + cw, chy - cw * 0.6))
+        p.end()
+
+
+# ── Search box (toolbar) ────────────────────────────────────────────────────────
+
+class _SearchField(QtWidgets.QLineEdit):
+    """QLineEdit that distinguishes Enter (next match) from Shift+Enter (previous)."""
+
+    next_requested = QtCore.Signal()
+    prev_requested = QtCore.Signal()
+
+    def keyPressEvent(self, event):
+        if event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+            if event.modifiers() & QtCore.Qt.ShiftModifier:
+                self.prev_requested.emit()
+            else:
+                self.next_requested.emit()
+            return
+        if event.key() == QtCore.Qt.Key_Escape and self.text():
+            self.clear()
+            return
+        super().keyPressEvent(event)
+
+
+class _SearchBox(QtWidgets.QWidget):
+    """Rounded search field with a magnifying-glass icon, for the top toolbar."""
+
+    text_changed   = QtCore.Signal(str)
+    next_requested = QtCore.Signal()
+    prev_requested = QtCore.Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("SearchBox")
+        self.setFixedSize(190, 28)
+
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(9, 0, 9, 0)
+        lay.setSpacing(6)
+
+        self._icon_lbl = QtWidgets.QLabel()
+        self._icon_lbl.setFixedSize(14, 14)
+        lay.addWidget(self._icon_lbl)
+
+        self._field = _SearchField()
+        self._field.setPlaceholderText("Пошук")
+        self._field.setFrame(False)
+        self._field.textChanged.connect(self.text_changed.emit)
+        self._field.next_requested.connect(self.next_requested.emit)
+        self._field.prev_requested.connect(self.prev_requested.emit)
+        lay.addWidget(self._field, 1)
+
+    def clear(self):
+        self._field.blockSignals(True)
+        self._field.clear()
+        self._field.blockSignals(False)
+
+    def apply_theme(self):
+        t = THEME_MGR.get()
+
+        pm = QtGui.QPixmap(14, 14)
+        pm.fill(QtCore.Qt.transparent)
+        p = QtGui.QPainter(pm)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        color = QtGui.QColor(t.nav_icon_inactive_color)
+        color.setAlpha(t.nav_icon_inactive_alpha)
+        _icons.draw(p, QtCore.QRectF(0, 0, 14, 14), "search", color)
+        p.end()
+        self._icon_lbl.setPixmap(pm)
+
+        self.setStyleSheet(f"""
+            QWidget#SearchBox {{
+                background: rgba(255,255,255,0.07);
+                border-radius: 8px;
+            }}
+        """)
+        self._field.setStyleSheet(
+            "QLineEdit { background: transparent; border: none;"
+            " color: rgba(255,255,255,0.85); font-size: 12px; }"
+        )
+
+
+# ── Page thumbnail (left navigation strip) ──────────────────────────────────────
+
+_THUMB_PANEL_WIDTH = 168
+_THUMB_TARGET_W    = 120
+
+
+class _ThumbnailItem(QtWidgets.QWidget):
+    """Single clickable page thumbnail; highlights when it's the active page."""
+
+    clicked = QtCore.Signal(int)
+    _PAD    = 8
+
+    def __init__(self, page_num: int, pixmap: QtGui.QPixmap, parent=None):
+        super().__init__(parent)
+        self._page_num = page_num
+        self._pixmap    = pixmap
+        self._active    = False
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setFixedSize(pixmap.width() + self._PAD * 2,
+                          pixmap.height() + self._PAD * 2 + 18)
+
+    def set_active(self, v: bool):
+        if self._active != v:
+            self._active = v
+            self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            self.clicked.emit(self._page_num)
+
+    def paintEvent(self, event):
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        t  = THEME_MGR.get()
+        px = self._PAD
+        py = self._PAD
+
+        if self._active:
+            accent = QtGui.QColor(t.accent)
+            p.setPen(QtGui.QPen(accent, 2))
+            p.setBrush(QtCore.Qt.NoBrush)
+            p.drawRoundedRect(QtCore.QRectF(px - 3, py - 3,
+                              self._pixmap.width() + 6, self._pixmap.height() + 6), 4, 4)
+        p.drawPixmap(px, py, self._pixmap)
+
+        num_r = QtCore.QRect(0, py + self._pixmap.height() + 4, self.width(), 16)
+        p.setFont(_icons.sf_font(11))
+        nc = QtGui.QColor(t.nav_label_active_color if self._active else t.nav_label_inactive_color)
+        nc.setAlpha(t.nav_label_active_alpha if self._active else t.nav_label_inactive_alpha)
+        p.setPen(nc)
+        p.drawText(num_r, QtCore.Qt.AlignCenter, str(self._page_num + 1))
+        p.end()
+
+
+class _ThumbnailPanel(QtWidgets.QScrollArea):
+    """Left navigation strip with page thumbnails (Acrobat/Preview-style)."""
+
+    page_selected = QtCore.Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.setFixedWidth(_THUMB_PANEL_WIDTH)
+
+        self._container = QtWidgets.QWidget()
+        self._vbox = QtWidgets.QVBoxLayout(self._container)
+        self._vbox.setContentsMargins(0, 10, 0, 10)
+        self._vbox.setSpacing(10)
+        self._vbox.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignHCenter)
+        self.setWidget(self._container)
+
+        self._items:   list[_ThumbnailItem] = []
+        self._current = -1
+
+    def load_doc(self, doc: fitz.Document):
+        self.clear()
+        if not doc:
+            return
+        pr    = doc.load_page(0).rect
+        scale = max(0.05, min(0.5, _THUMB_TARGET_W / max(pr.width, 1.0)))
+        mat   = fitz.Matrix(scale, scale)
+        for i in range(doc.page_count):
+            pix  = safe_thumbnail_render(doc.load_page(i), mat)
+            item = _ThumbnailItem(i, pix)
+            item.clicked.connect(self.page_selected.emit)
+            self._vbox.addWidget(item, alignment=QtCore.Qt.AlignHCenter)
+            self._items.append(item)
+
+    def clear(self):
+        for it in self._items:
+            it.deleteLater()
+        self._items.clear()
+        self._current = -1
+
+    def set_current(self, idx: int):
+        if idx == self._current:
+            return
+        if 0 <= self._current < len(self._items):
+            self._items[self._current].set_active(False)
+        if 0 <= idx < len(self._items):
+            self._items[idx].set_active(True)
+            self.ensureWidgetVisible(self._items[idx], 0, 60)
+        self._current = idx
+
+    def apply_theme(self):
+        t  = THEME_MGR.get()
+        ha = min(1.0, t.scrollbar_alpha / 255)
+        self.setStyleSheet(f"""
+            QScrollArea {{ background: {t.bg_sidebar}; border: none;
+                          border-right: 1px solid {t.bg_border}; }}
+            QScrollBar:vertical {{ width: 6px; background: transparent; border: none; margin: 0; }}
+            QScrollBar::handle:vertical {{
+                background: rgba(255,255,255,{ha:.3f}); border-radius: 3px; min-height: 24px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
+        """)
+        self._container.setStyleSheet(f"background: {t.bg_sidebar};")
+        for it in self._items:
+            it.update()
+
+
+# ── Table of contents (left navigation strip) ───────────────────────────────────
+
+class _TocPanel(QtWidgets.QTreeWidget):
+    """Left navigation panel showing the PDF's table of contents (outline)."""
+
+    page_selected = QtCore.Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(_THUMB_PANEL_WIDTH)
+        self.setHeaderHidden(True)
+        self.setIndentation(14)
+        self.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self.setUniformRowHeights(True)
+        self.itemClicked.connect(self._on_item_clicked)
+
+    def load_doc(self, doc: fitz.Document | None):
+        self.clear()
+        if not doc:
+            return
+        toc = doc.get_toc(simple=True)
+        if not toc:
+            placeholder = QtWidgets.QTreeWidgetItem(["Зміст відсутній"])
+            placeholder.setFlags(QtCore.Qt.NoItemFlags)
+            self.addTopLevelItem(placeholder)
+            return
+        stack: list[QtWidgets.QTreeWidgetItem] = []
+        for level, title, page in toc:
+            item = QtWidgets.QTreeWidgetItem([title])
+            item.setData(0, QtCore.Qt.UserRole, max(0, page - 1))
+            while len(stack) >= max(level, 1):
+                stack.pop()
+            if stack:
+                stack[-1].addChild(item)
+            else:
+                self.addTopLevelItem(item)
+            stack.append(item)
+        self.expandAll()
+
+    def _on_item_clicked(self, item: QtWidgets.QTreeWidgetItem, _col: int):
+        page = item.data(0, QtCore.Qt.UserRole)
+        if page is not None:
+            self.page_selected.emit(page)
+
+    def apply_theme(self):
+        t = THEME_MGR.get()
+        self.setStyleSheet(f"""
+            QTreeWidget {{
+                background: {t.bg_sidebar}; border: none;
+                border-right: 1px solid {t.bg_border};
+                color: rgba(255,255,255,0.78);
+                font-size: 12px;
+                outline: none;
+            }}
+            QTreeWidget::item {{ padding: 5px 4px; }}
+            QTreeWidget::item:selected {{ background: rgba(255,255,255,0.08); }}
+            QTreeWidget::branch {{ background: transparent; }}
+        """)
 
 
 class ScreenViewer(QtWidgets.QWidget):
@@ -205,6 +668,11 @@ class ScreenViewer(QtWidgets.QWidget):
         self._scale:        float                = _DEFAULT_SCALE
         self._pages:        list[PageWidget]     = []
         self._current_page: int                  = 0
+        self._side_mode:    str                  = "thumbnails"   # 'thumbnails' | 'toc'
+        self._page_mode:    str                  = "continuous"   # 'continuous' | 'single' | 'two'
+        self._search_query:       str = ""
+        self._search_results:     list[tuple[int, tuple[float, float, float, float]]] = []
+        self._search_current_idx: int = -1
         self.setAcceptDrops(True)
         self._build_ui()
 
@@ -220,11 +688,18 @@ class ScreenViewer(QtWidgets.QWidget):
         self._path = path
         self._doc  = fitz.open(path)
         self._lbl_file.setText(os.path.basename(path))
+        self._side_header_lbl.setText(os.path.basename(path))
         self._current_page = 0
         self._lbl_pages.setText(f"1/{self._doc.page_count}")
         self._lbl_cursor.setText("")
         self._scale = self._fit_scale()
         self._render_pages()
+        self._thumb_panel.load_doc(self._doc)
+        self._thumb_panel.set_current(0)
+        self._toc_panel.load_doc(self._doc)
+        self._clear_search()
+        self._search_box.clear()
+        self._update_zoom_label()
 
     def has_doc(self) -> bool:
         return self._doc is not None
@@ -232,6 +707,10 @@ class ScreenViewer(QtWidgets.QWidget):
     def close_doc(self):
         """Release the loaded PDF and rendered pages (e.g. before discarding the tab)."""
         self._clear_pages()
+        self._thumb_panel.clear()
+        self._toc_panel.clear()
+        self._clear_search()
+        self._search_box.clear()
         if self._doc:
             try:
                 self._doc.close()
@@ -247,6 +726,98 @@ class ScreenViewer(QtWidgets.QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
+        # ── body: sidebar (header + thumbnails/TOC) + document column ──────────
+        body = QtWidgets.QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        root.addLayout(body, 1)
+
+        # ── left: sidebar (its own header, no toolbar buttons) ──────────────────
+        self._side_panel = QtWidgets.QWidget()
+        self._side_panel.setFixedWidth(_THUMB_PANEL_WIDTH)
+        self._side_panel.setVisible(False)
+        side_col = QtWidgets.QVBoxLayout(self._side_panel)
+        side_col.setContentsMargins(0, 0, 0, 0)
+        side_col.setSpacing(0)
+
+        self._side_header = QtWidgets.QWidget()
+        self._side_header.setFixedHeight(44)
+        shl = QtWidgets.QVBoxLayout(self._side_header)
+        shl.setContentsMargins(14, 0, 14, 0)
+        self._side_header_lbl = QtWidgets.QLabel("Відкрийте PDF для перегляду")
+        self._side_header_lbl.setStyleSheet(
+            "color: rgba(255,255,255,0.65); font-size: 12px; font-weight: 600;"
+            " background: transparent; border: none;"
+        )
+        shl.addWidget(self._side_header_lbl, 0, QtCore.Qt.AlignVCenter)
+        side_col.addWidget(self._side_header)
+
+        self._thumb_panel = _ThumbnailPanel()
+        self._thumb_panel.page_selected.connect(self._go_to_page)
+
+        self._toc_panel = _TocPanel()
+        self._toc_panel.page_selected.connect(self._go_to_page)
+
+        self._side_stack = QtWidgets.QStackedWidget()
+        self._side_stack.addWidget(self._thumb_panel)
+        self._side_stack.addWidget(self._toc_panel)
+        side_col.addWidget(self._side_stack, 1)
+
+        body.addWidget(self._side_panel)
+
+        # ── right: document toolbar + scroll area + status bar ──────────────────
+        right = QtWidgets.QVBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(0)
+        body.addLayout(right, 1)
+
+        # ── document toolbar (sits above the work area, not the sidebar) ────────
+        self._toolbar = QtWidgets.QWidget()
+        self._toolbar.setFixedHeight(44)
+        tbl = QtWidgets.QHBoxLayout(self._toolbar)
+        tbl.setContentsMargins(10, 0, 10, 0)
+        tbl.setSpacing(2)
+
+        self._thumb_toggle_btn = _ToolbarButton("sidebar", chevron=True)
+        self._thumb_toggle_btn.setToolTip(
+            "Мініатюри сторінок\nПКМ — меню перегляду"
+        )
+        self._thumb_toggle_btn.clicked.connect(self._toggle_thumbnails)
+        self._thumb_toggle_btn.right_clicked.connect(self._show_sidebar_menu)
+        tbl.addWidget(self._thumb_toggle_btn)
+
+        tbl.addStretch(1)
+
+        zoom_out_btn = _ToolbarButton("−", is_icon=False)
+        zoom_out_btn.setToolTip("Зменшити")
+        zoom_out_btn.clicked.connect(self._zoom_out)
+        tbl.addWidget(zoom_out_btn)
+
+        self._lbl_zoom = QtWidgets.QLabel("100%")
+        self._lbl_zoom.setFixedWidth(48)
+        self._lbl_zoom.setAlignment(QtCore.Qt.AlignCenter)
+        tbl.addWidget(self._lbl_zoom)
+
+        zoom_in_btn = _ToolbarButton("+", is_icon=False)
+        zoom_in_btn.setToolTip("Збільшити")
+        zoom_in_btn.clicked.connect(self._zoom_in)
+        tbl.addWidget(zoom_in_btn)
+
+        tbl.addSpacing(10)
+
+        self._search_box = _SearchBox()
+        self._search_box.text_changed.connect(self._run_search)
+        self._search_box.next_requested.connect(self._search_next)
+        self._search_box.prev_requested.connect(self._search_prev)
+        tbl.addWidget(self._search_box)
+
+        self._toolbar_buttons = [self._thumb_toggle_btn, zoom_out_btn, zoom_in_btn]
+        right.addWidget(self._toolbar)
+
+        self._toolbar_divider = QtWidgets.QFrame()
+        self._toolbar_divider.setFixedHeight(1)
+        right.addWidget(self._toolbar_divider)
+
         # ── scroll area ───────────────────────────────────────────────────────
         self._scroll = QtWidgets.QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -261,7 +832,7 @@ class ScreenViewer(QtWidgets.QWidget):
         self._scroll.viewport().installEventFilter(self)
         self._scroll.verticalScrollBar().valueChanged.connect(self._update_current_page)
 
-        root.addWidget(self._scroll, 1)
+        right.addWidget(self._scroll, 1)
 
         # ── status bar (bottom) ───────────────────────────────────────────────
         sb = QtWidgets.QWidget()
@@ -289,7 +860,7 @@ class ScreenViewer(QtWidgets.QWidget):
         sbl.addSpacing(12)
 
         self._btn_first_page = _FirstPageButton()
-        self._btn_first_page.clicked.connect(lambda: self._scroll_to_page(0))
+        self._btn_first_page.clicked.connect(lambda: self._go_to_page(0))
         sbl.addWidget(self._btn_first_page)
         sbl.addSpacing(6)
 
@@ -320,13 +891,115 @@ class ScreenViewer(QtWidgets.QWidget):
         sbl.addWidget(self._lbl_cursor)
 
         self._status_bar = sb
-        root.addWidget(sb)
+        right.addWidget(sb)
         self.apply_theme()
+
+    def _toggle_thumbnails(self):
+        """Left-click on the sidebar toggle button: show thumbnails, or hide
+        the panel if thumbnails are already showing."""
+        if self._side_panel.isVisible() and self._side_mode == "thumbnails":
+            self._side_panel.setVisible(False)
+        else:
+            self._show_side_panel("thumbnails")
+
+    def _show_side_panel(self, mode: str):
+        self._side_mode = mode
+        self._side_stack.setCurrentIndex(0 if mode == "thumbnails" else 1)
+        self._side_panel.setVisible(True)
+
+    def _set_page_mode(self, mode: str):
+        if self._page_mode == mode:
+            return
+        self._page_mode = mode
+        self._rebuild_page_layout()
+        self._go_to_page(self._current_page)
+
+    def _show_sidebar_menu(self):
+        """Right-click on the sidebar toggle button: Acrobat/Preview-style
+        view menu (sidebar content + page layout mode)."""
+        t = THEME_MGR.get()
+        menu = QtWidgets.QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background: {t.bg_sidebar};
+                border: 1px solid {t.bg_border};
+                padding: 6px 0px;
+            }}
+            QMenu::item {{
+                padding: 6px 30px 6px 18px;
+                color: rgba(255,255,255,0.85);
+                font-size: 13px;
+            }}
+            QMenu::item:selected {{ background: rgba(255,255,255,0.08); }}
+            QMenu::item:disabled {{ color: rgba(255,255,255,0.32); }}
+            QMenu::separator {{
+                height: 1px; background: {t.bg_border}; margin: 6px 10px;
+            }}
+            QMenu::indicator {{ width: 14px; height: 14px; left: 6px; }}
+        """)
+
+        side_visible = self._side_panel.isVisible()
+
+        act_thumbs = menu.addAction("Мініатюри")
+        act_thumbs.setCheckable(True)
+        act_thumbs.setChecked(side_visible and self._side_mode == "thumbnails")
+        act_thumbs.triggered.connect(lambda: self._show_side_panel("thumbnails"))
+
+        act_toc = menu.addAction("Зміст")
+        act_toc.setCheckable(True)
+        act_toc.setChecked(side_visible and self._side_mode == "toc")
+        act_toc.triggered.connect(lambda: self._show_side_panel("toc"))
+
+        for label in ("Виділення та нотатки", "Закладки", "Індексний аркуш"):
+            menu.addAction(label).setEnabled(False)
+
+        menu.addSeparator()
+
+        act_cont = menu.addAction("Неперервне прокручування")
+        act_cont.setCheckable(True)
+        act_cont.setChecked(self._page_mode == "continuous")
+        act_cont.triggered.connect(lambda: self._set_page_mode("continuous"))
+
+        act_single = menu.addAction("Окрема сторінка")
+        act_single.setCheckable(True)
+        act_single.setChecked(self._page_mode == "single")
+        act_single.triggered.connect(lambda: self._set_page_mode("single"))
+
+        act_two = menu.addAction("Дві сторінки")
+        act_two.setCheckable(True)
+        act_two.setChecked(self._page_mode == "two")
+        act_two.triggered.connect(lambda: self._set_page_mode("two"))
+
+        menu.exec(self._thumb_toggle_btn.mapToGlobal(
+            QtCore.QPoint(0, self._thumb_toggle_btn.height())))
 
     # ── theme ─────────────────────────────────────────────────────────────────
 
     def apply_theme(self):
         t = THEME_MGR.get()
+
+        # sidebar header (file name above thumbnails/TOC)
+        self._side_header.setStyleSheet(
+            f"background: {t.bg_sidebar}; border-bottom: 1px solid {t.bg_border};"
+        )
+        self._side_header_lbl.setStyleSheet(
+            f"color: rgba(255,255,255,{t.statusbar_file_alpha / 255:.3f});"
+            " font-size: 12px; font-weight: 600;"
+            " background: transparent; border: none;"
+        )
+
+        # top toolbar background + border
+        self._toolbar.setStyleSheet(f"background: {t.bg_sidebar};")
+        self._toolbar_divider.setStyleSheet(f"background: {t.bg_border};")
+        self._lbl_zoom.setStyleSheet(
+            f"color: rgba(255,255,255,{t.statusbar_page_alpha / 255:.3f}); font-size: 12px;"
+            " background: transparent; border: none;"
+        )
+        for btn in self._toolbar_buttons:
+            btn.update()
+        self._thumb_panel.apply_theme()
+        self._toc_panel.apply_theme()
+        self._search_box.apply_theme()
 
         # status bar background + border
         self._status_bar.setStyleSheet(
@@ -390,8 +1063,12 @@ class ScreenViewer(QtWidgets.QWidget):
     # ── pages ─────────────────────────────────────────────────────────────────
 
     def _clear_pages(self):
-        for pw in self._pages:
-            pw.deleteLater()
+        while self._vbox.count():
+            item = self._vbox.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
         self._pages.clear()
 
     def _render_pages(self):
@@ -411,35 +1088,96 @@ class ScreenViewer(QtWidgets.QWidget):
             shadow.setColor(QtGui.QColor(0, 0, 0, 110))
             pw.setGraphicsEffect(shadow)
 
-            self._vbox.addWidget(pw, alignment=QtCore.Qt.AlignHCenter)
             self._pages.append(pw)
+
+        self._rebuild_page_layout()
 
     def _on_page_clicked(self, source: PageWidget):
         for pw in self._pages:
             if pw is not source:
                 pw.clear_selection()
 
-    def _scroll_to_page(self, page_num: int):
+    # ── page layout modes (continuous / single / two-up) ───────────────────────
+
+    def _rebuild_page_layout(self):
+        """Re-arrange the existing PageWidgets in self._vbox according to
+        self._page_mode, without destroying/recreating them."""
+        while self._vbox.count():
+            item = self._vbox.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                if w not in self._pages:
+                    w.deleteLater()
+
+        if self._page_mode == "two":
+            i = 0
+            while i < len(self._pages):
+                row = QtWidgets.QWidget()
+                row_lay = QtWidgets.QHBoxLayout(row)
+                row_lay.setContentsMargins(0, 0, 0, 0)
+                row_lay.setSpacing(16)
+                row_lay.addWidget(self._pages[i])
+                if i + 1 < len(self._pages):
+                    row_lay.addWidget(self._pages[i + 1])
+                self._vbox.addWidget(row, alignment=QtCore.Qt.AlignHCenter)
+                i += 2
+        else:
+            for pw in self._pages:
+                self._vbox.addWidget(pw, alignment=QtCore.Qt.AlignHCenter)
+
+        self._apply_page_visibility()
+        self._vbox.activate()
+
+    def _apply_page_visibility(self):
+        if self._page_mode == "single":
+            for i, pw in enumerate(self._pages):
+                pw.setVisible(i == self._current_page)
+        else:
+            for pw in self._pages:
+                pw.setVisible(True)
+
+    def _scroll_anchor(self, page_num: int) -> QtWidgets.QWidget:
+        """Widget whose .pos().y() should be used to scroll to page_num —
+        the page itself, or its row wrapper in two-up mode."""
+        pw     = self._pages[page_num]
+        parent = pw.parentWidget()
+        return pw if parent is self._container else parent
+
+    def _go_to_page(self, page_num: int):
         if not self._pages or page_num < 0 or page_num >= len(self._pages):
             return
-        pw = self._pages[page_num]
-        self._scroll.verticalScrollBar().setValue(pw.pos().y())
+        self._current_page = page_num
+        if self._page_mode == "single":
+            self._apply_page_visibility()
+            if self._doc:
+                self._lbl_pages.setText(f"{page_num + 1}/{self._doc.page_count}")
+            self._thumb_panel.set_current(page_num)
+        else:
+            anchor = self._scroll_anchor(page_num)
+            self._scroll.verticalScrollBar().setValue(anchor.pos().y())
 
     # ── current page tracking ─────────────────────────────────────────────────
 
     def _update_current_page(self):
-        if not self._pages or not self._doc:
+        if not self._pages or not self._doc or self._page_mode == "single":
             return
         vp_mid = (self._scroll.verticalScrollBar().value()
                   + self._scroll.viewport().height() / 2)
         best = 0
-        for i, pw in enumerate(self._pages):
-            if pw.pos().y() <= vp_mid:
+        last_anchor = None
+        for i in range(len(self._pages)):
+            anchor = self._scroll_anchor(i)
+            if anchor is last_anchor:
+                continue            # same row (two-up mode) — already counted
+            last_anchor = anchor
+            if anchor.pos().y() <= vp_mid:
                 best = i
             else:
                 break
         self._current_page = best
         self._lbl_pages.setText(f"{best + 1}/{self._doc.page_count}")
+        self._thumb_panel.set_current(best)
 
     # ── cursor coordinates ────────────────────────────────────────────────────
 
@@ -476,6 +1214,74 @@ class ScreenViewer(QtWidgets.QWidget):
         self._scale = new_scale
         for pw in self._pages:
             pw.rescale(new_scale)
+        self._update_zoom_label()
+
+    def _update_zoom_label(self):
+        self._lbl_zoom.setText(f"{round(self._scale / _SCALE_100 * 100)}%")
+
+    # ── text search ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _search_page_ci(page: fitz.Page, query: str) -> list:
+        """page.search_for() is case-sensitive for non-ASCII (e.g. Cyrillic)
+        text, so query a few case variants and merge/dedupe the hits."""
+        seen: set[tuple[float, float, float, float]] = set()
+        results = []
+        for variant in {query, query.lower(), query.upper(), query.capitalize()}:
+            for r in page.search_for(variant):
+                key = (round(r.x0, 1), round(r.y0, 1), round(r.x1, 1), round(r.y1, 1))
+                if key not in seen:
+                    seen.add(key)
+                    results.append(r)
+        return results
+
+    def _run_search(self, query: str):
+        self._search_query = query.strip()
+        self._search_results = []
+        if self._doc and self._search_query:
+            for i in range(self._doc.page_count):
+                page = self._doc.load_page(i)
+                for r in self._search_page_ci(page, self._search_query):
+                    self._search_results.append((i, (r.x0, r.y0, r.x1, r.y1)))
+        self._search_current_idx = 0 if self._search_results else -1
+        self._apply_search_highlights()
+        if self._search_results:
+            self._go_to_search_result(0, scroll=True)
+
+    def _apply_search_highlights(self):
+        by_page: dict[int, list[tuple[float, float, float, float]]] = {}
+        for pi, rect in self._search_results:
+            by_page.setdefault(pi, []).append(rect)
+        cur_page, cur_rect = -1, None
+        if 0 <= self._search_current_idx < len(self._search_results):
+            cur_page, cur_rect = self._search_results[self._search_current_idx]
+        for i, pw in enumerate(self._pages):
+            pw.set_search_highlights(by_page.get(i, []),
+                                     cur_rect if i == cur_page else None)
+
+    def _go_to_search_result(self, idx: int, scroll: bool = True):
+        if not self._search_results:
+            return
+        self._search_current_idx = idx % len(self._search_results)
+        self._apply_search_highlights()
+        if scroll:
+            page_num, _rect = self._search_results[self._search_current_idx]
+            self._go_to_page(page_num)
+
+    def _search_next(self):
+        if self._search_results:
+            self._go_to_search_result(self._search_current_idx + 1)
+
+    def _search_prev(self):
+        if self._search_results:
+            self._go_to_search_result(self._search_current_idx - 1)
+
+    def _clear_search(self):
+        self._search_query       = ""
+        self._search_results     = []
+        self._search_current_idx = -1
+        for pw in self._pages:
+            pw.set_search_highlights([], None)
 
     # ── print ─────────────────────────────────────────────────────────────────
 
@@ -539,13 +1345,13 @@ class ScreenViewer(QtWidgets.QWidget):
     def _handle_nav_key(self, key: int) -> bool:
         n = len(self._pages)
         if key == QtCore.Qt.Key_Home:
-            self._scroll_to_page(0)
+            self._go_to_page(0)
         elif key == QtCore.Qt.Key_End:
-            self._scroll_to_page(n - 1)
+            self._go_to_page(n - 1)
         elif key == QtCore.Qt.Key_PageDown:
-            self._scroll_to_page(min(self._current_page + 1, n - 1))
+            self._go_to_page(min(self._current_page + 1, n - 1))
         elif key == QtCore.Qt.Key_PageUp:
-            self._scroll_to_page(max(self._current_page - 1, 0))
+            self._go_to_page(max(self._current_page - 1, 0))
         else:
             return False
         return True
@@ -559,6 +1365,10 @@ class ScreenViewer(QtWidgets.QWidget):
                 else:
                     self._zoom_out()
                 return True
+            elif t == QtCore.QEvent.NativeGesture:
+                if event.gestureType() == QtCore.Qt.ZoomNativeGesture:
+                    self._apply_scale(self._scale * (1.0 + event.value()))
+                    return True
             elif t == QtCore.QEvent.KeyPress:
                 if self._handle_nav_key(event.key()):
                     return True
