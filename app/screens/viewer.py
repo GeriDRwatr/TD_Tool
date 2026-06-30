@@ -229,6 +229,17 @@ class ScreenViewer(QtWidgets.QWidget):
     def has_doc(self) -> bool:
         return self._doc is not None
 
+    def close_doc(self):
+        """Release the loaded PDF and rendered pages (e.g. before discarding the tab)."""
+        self._clear_pages()
+        if self._doc:
+            try:
+                self._doc.close()
+            except Exception:
+                pass
+            self._doc = None
+        self._path = None
+
     # ── UI ────────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
@@ -576,3 +587,103 @@ class ScreenViewer(QtWidgets.QWidget):
         if self._doc and not self._pages:
             self._scale = self._fit_scale()
             self._render_pages()
+
+
+# ── Tabbed viewer (Chrome-style tabs, one per open PDF) ────────────────────────
+
+class PdfViewerTabs(QtWidgets.QWidget):
+    """Holds one ScreenViewer per open PDF, switchable via a Chrome-like tab bar."""
+
+    all_closed = QtCore.Signal()   # emitted when the last tab is closed
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self._tabs = QtWidgets.QTabWidget()
+        self._tabs.setDocumentMode(True)
+        self._tabs.setTabsClosable(True)
+        self._tabs.tabCloseRequested.connect(self._close_tab)
+        root.addWidget(self._tabs)
+
+        self._add_btn = QtWidgets.QToolButton()
+        self._add_btn.setText("+")
+        self._add_btn.setToolTip("Відкрити ще один PDF")
+        self._add_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self._add_btn.setAutoRaise(True)
+        self._add_btn.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._add_btn.clicked.connect(self._on_add_clicked)
+        self._tabs.setCornerWidget(self._add_btn, QtCore.Qt.TopRightCorner)
+
+    # ── public API ────────────────────────────────────────────────────────────
+
+    def add_tab(self, path: str):
+        for i in range(self._tabs.count()):
+            if self._tabs.widget(i)._path == path:
+                self._tabs.setCurrentIndex(i)
+                return
+        viewer = ScreenViewer()
+        viewer.setAcceptDrops(False)   # adding files goes through the "+" button / drop zone
+        viewer.load_pdf(path)
+        idx = self._tabs.addTab(viewer, os.path.basename(path))
+        self._tabs.setTabToolTip(idx, path)
+        self._tabs.setCurrentIndex(idx)
+
+    def reset(self):
+        while self._tabs.count():
+            w = self._tabs.widget(0)
+            self._tabs.removeTab(0)
+            w.close_doc()
+            w.deleteLater()
+
+    def paths(self) -> list[str]:
+        return [self._tabs.widget(i)._path for i in range(self._tabs.count())]
+
+    def current_viewer(self) -> ScreenViewer | None:
+        return self._tabs.currentWidget()
+
+    def apply_theme(self):
+        t = THEME_MGR.get()
+        self._tabs.setStyleSheet(f"""
+            QTabWidget::pane {{ border: none; background: {t.bg_main}; }}
+            QTabBar {{ background: {t.bg_sidebar}; }}
+            QTabBar::tab {{
+                background: {t.bg_sidebar};
+                color: rgba(255,255,255,0.6);
+                padding: 7px 14px;
+                border: none;
+                border-right: 1px solid {t.bg_border};
+            }}
+            QTabBar::tab:selected {{
+                background: {t.bg_main};
+                color: rgba(255,255,255,0.95);
+            }}
+            QTabBar::tab:hover:!selected {{ background: {t.bg_hover}; }}
+        """)
+        self._add_btn.setStyleSheet(
+            "QToolButton { color: rgba(255,255,255,0.55); background: transparent;"
+            " border: none; font-size: 15px; padding: 4px 12px; }"
+            " QToolButton:hover { color: white; }"
+        )
+        for i in range(self._tabs.count()):
+            self._tabs.widget(i).apply_theme()
+
+    # ── internals ─────────────────────────────────────────────────────────────
+
+    def _close_tab(self, index: int):
+        w = self._tabs.widget(index)
+        self._tabs.removeTab(index)
+        w.close_doc()
+        w.deleteLater()
+        if self._tabs.count() == 0:
+            self.all_closed.emit()
+
+    def _on_add_clicked(self):
+        paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
+            self, "Відкрити PDF", "", "PDF files (*.pdf)"
+        )
+        for p in paths:
+            self.add_tab(p)

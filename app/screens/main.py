@@ -3,7 +3,7 @@ import json
 from PySide6 import QtWidgets, QtCore, QtGui
 
 from .merge import ScreenMergeMulti
-from .viewer import ScreenViewer
+from .viewer import PdfViewerTabs
 from ..word_editor import WordEditor
 from ..theme import THEME_MGR
 from .. import icons as _icons
@@ -496,7 +496,6 @@ class ScreenMain(QtWidgets.QWidget):
         super().__init__()
         self._right_collapsed = False
         self._current_format  = "none"    # 'none' | 'pdf' | 'word' | 'unsupported'
-        self._current_path    = None
         self._pdf_scenario    = "viewer"  # 'viewer' | 'editor' — meaningful when format == 'pdf'
         self._all_right_btns  = []   # all NavButtons across all right-panel pages
         self._theme_dividers: list[QtWidgets.QFrame] = []
@@ -537,9 +536,10 @@ class ScreenMain(QtWidgets.QWidget):
         self._drop_zone.file_chosen.connect(self._on_file_chosen)
         self._stack.addWidget(self._drop_zone)
 
-        # PDF viewer
-        self._viewer = ScreenViewer()
-        self._stack.addWidget(self._viewer)
+        # PDF viewer — Chrome-like tabs, one per open PDF
+        self._viewer_tabs = PdfViewerTabs()
+        self._viewer_tabs.all_closed.connect(self._on_new_file)
+        self._stack.addWidget(self._viewer_tabs)
 
         # Unified PDF editor (merge/split)
         self._merge = ScreenMergeMulti(self._on_new_file)
@@ -659,10 +659,14 @@ class ScreenMain(QtWidgets.QWidget):
         ])
 
     def _on_print(self):
-        self._viewer.print_document()
+        v = self._viewer_tabs.current_viewer()
+        if v:
+            v.print_document()
 
     def _on_print_preview(self):
-        self._viewer.print_preview()
+        v = self._viewer_tabs.current_viewer()
+        if v:
+            v.print_preview()
 
     # ── theme ─────────────────────────────────────────────────────────────────
 
@@ -681,7 +685,7 @@ class ScreenMain(QtWidgets.QWidget):
         for btn in self._all_right_btns:
             btn.update()
         self._drop_zone.update()
-        self._viewer.apply_theme()
+        self._viewer_tabs.apply_theme()
         self._word_editor.apply_theme()
 
     # ── PDF scenario switching ───────────────────────────────────────────────
@@ -694,17 +698,16 @@ class ScreenMain(QtWidgets.QWidget):
         if self._current_format != "pdf":
             return
         self._pdf_scenario = "viewer"
-        if self._viewer._path != self._current_path:
-            self._viewer.load_pdf(self._current_path)
-        self._stack.setCurrentWidget(self._viewer)
+        self._stack.setCurrentWidget(self._viewer_tabs)
         self._update_pdf_btn_states()
 
     def _on_pdf_edit(self):
         if self._current_format != "pdf":
             return
         self._pdf_scenario = "editor"
-        if self._current_path not in self._merge.files:
-            self._merge.add_file(self._current_path)
+        for p in self._viewer_tabs.paths():
+            if p not in self._merge.files:
+                self._merge.add_file(p)
         self._stack.setCurrentWidget(self._merge)
         self._update_pdf_btn_states()
 
@@ -712,7 +715,7 @@ class ScreenMain(QtWidgets.QWidget):
 
     def open_in_viewer(self, path: str):
         """Open a PDF directly in the viewer (e.g. launched from OS file association)."""
-        self._open_pdf(path)
+        self._open_pdf_tabs([path])
 
     def _toggle_right_sidebar(self):
         self._right_collapsed = not self._right_collapsed
@@ -736,33 +739,19 @@ class ScreenMain(QtWidgets.QWidget):
             return
         exts = {os.path.splitext(p)[1].lower() for p in paths}
         if exts == {".pdf"}:
-            if len(paths) > 1:
-                self._open_pdf_multi(paths)
-            else:
-                self._open_pdf(paths[0])
+            self._open_pdf_tabs(paths)
         elif exts == {".docx"} and len(paths) == 1:
             self._open_word(paths[0])
         else:
             self._open_unsupported(paths[0])
 
-    def _open_pdf(self, path: str):
+    def _open_pdf_tabs(self, paths: list):
         self._current_format = "pdf"
-        self._current_path   = path
         self._pdf_scenario   = "viewer"
-        self._viewer.load_pdf(path)
-        self._stack.setCurrentWidget(self._viewer)
-        self._right_tool_stack.setCurrentIndex(1)
-        self._right_sidebar.setVisible(True)
-        self._update_pdf_btn_states()
-
-    def _open_pdf_multi(self, paths: list):
-        self._current_format = "pdf"
-        self._current_path   = paths[0]
-        self._pdf_scenario   = "editor"
-        self._merge.reset()
+        self._viewer_tabs.reset()
         for p in paths:
-            self._merge.add_file(p)
-        self._stack.setCurrentWidget(self._merge)
+            self._viewer_tabs.add_tab(p)
+        self._stack.setCurrentWidget(self._viewer_tabs)
         self._right_tool_stack.setCurrentIndex(1)
         self._right_sidebar.setVisible(True)
         self._update_pdf_btn_states()
@@ -777,7 +766,6 @@ class ScreenMain(QtWidgets.QWidget):
             if res != QtWidgets.QMessageBox.Yes:
                 return
         self._current_format = "word"
-        self._current_path   = path
         self._word_editor.open_file(path)
         self._stack.setCurrentWidget(self._word_editor)
         self._right_tool_stack.setCurrentIndex(2)
@@ -785,7 +773,6 @@ class ScreenMain(QtWidgets.QWidget):
 
     def _open_unsupported(self, path: str):
         self._current_format = "unsupported"
-        self._current_path   = path
         ext = os.path.splitext(path)[1] or "файл"
         self._coming_soon.set_label(f"Формат {ext}")
         self._stack.setCurrentWidget(self._coming_soon)
@@ -802,8 +789,8 @@ class ScreenMain(QtWidgets.QWidget):
             if res != QtWidgets.QMessageBox.Yes:
                 return
         self._merge.reset()
+        self._viewer_tabs.reset()
         self._current_format = "none"
-        self._current_path   = None
         self._stack.setCurrentWidget(self._drop_zone)
         self._right_tool_stack.setCurrentIndex(0)
         self._right_sidebar.setVisible(False)
