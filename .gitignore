@@ -26,9 +26,6 @@ installer_output/
 window_state.json
 app/theme.json
 
-# Local icon source pack (only bundled icons in app/assets/ are committed)
-Lucide/
-
 # Test / sample PDF files
 *.pdf
 
