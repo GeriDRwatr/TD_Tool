@@ -1,6 +1,49 @@
+=== ДЛЯ CLAUDE — ЧИТАЙ ПЕРШ НІЖ ПОЧИНАТИ ===
+
+Привіт. Це TDTool — десктопний PDF-переглядач + редактор (PySide6 + PyMuPDF, Python 3.13).
+Користувач — Герід, працює між Windows і Маком, зараз перейшов на Мак.
+
+ПРАВИЛА РОБОТИ В ЦЬОМУ ПРОЄКТІ (не забувай):
+- Коміти — українською, дієслово в минулому часі від першої особи ("Переробив", "Виправив", "Додав")
+- НЕ додавати "Co-Authored-By: Claude" у коміти
+- Після значних змін — оновлювати пам'ять (memory) самостійно без запиту
+
+ПОТОЧНИЙ СТАН ПРОЄКТУ (актуально на момент переходу на Мак):
+
+viewer.py — основний файл, там майже вся логіка переглядача:
+  - _FileTabBar: кастомний таббар, setUsesScrollButtons(False), власний _scroll_px offset
+    кнопки < > перемикають активну вкладку (не скролять), кнопка + додає PDF
+    розташування: [tabs(flex)] [+] [<] [>] — кнопки справа від вкладок
+  - _ThumbnailPanel: ліва панель мініатюр, синхронізується з поворотом сторінки
+    (сигнал page_rotation_changed → update_rotation з rotation-aware scale)
+  - ScreenViewer: переглядач, тулбар, статус-бар
+  - PdfViewerTabs: контейнер вкладок + shared sidebar
+
+ЩО МОЖЕ ПОВОДИТИСЬ ІНАКШЕ НА МАК:
+  - app/platform.py — Windows-only код, на Маку автоматично no-op (не падає)
+  - Кольори тайтлбару (set_title_bar_color) — тільки Windows, на Маку ігнорується
+  - DPI: на Retina дисплеї devicePixelRatio=2 — рендеринг вже враховує це через _device_pixel_ratio()
+  - Шрифти: sf_font() намагається знайти SF Pro, на Маку він буде доступний нативно
+
+ЯК ПОЧАТИ РОБОТУ:
+  cd TD_Tool && source venv/bin/activate && python main.py
+
+=== КІНЕЦЬ ІНСТРУКЦІЇ ДЛЯ CLAUDE ===
+
 Привіт. Продовжуємо роботу над проєктом TDTool — PDF-переглядач + редактор на PySide6 + PyMuPDF (Python 3.13).
 
 Репо: https://github.com/GeriDRwatr/TD_Tool.git
+
+--- СИНХРОНІЗАЦІЯ МІЖ ПРИСТРОЯМИ ---
+
+На Windows (перед тим як перейти на Мак):
+  git add -A
+  git commit -m "..."
+  git push
+
+На Маку (щоб отримати свіжий стан):
+  git pull
+
 
 --- РОЗГОРТАННЯ НА WINDOWS ---
 
@@ -9,6 +52,29 @@ cd TD_Tool
 python -m venv venv
 venv\Scripts\activate
 pip install PySide6 PyMuPDF python-docx pywin32-ctypes
+python main.py
+
+
+--- РОЗГОРТАННЯ НА МАК (перший раз) ---
+
+git clone https://github.com/GeriDRwatr/TD_Tool.git
+cd TD_Tool
+python3 -m venv venv
+source venv/bin/activate
+pip install PySide6 PyMuPDF python-docx
+python main.py
+
+  Примітки:
+  - pywin32-ctypes НЕ встановлювати — Windows-only, на маку не потрібен
+  - Якщо python3 не знайдено: brew install python
+  - Якщо PySide6 не встановлюється: перевір що Xcode Command Line Tools є (xcode-select --install)
+
+
+--- НАСТУПНІ СЕСІЇ НА МАК (якщо venv вже є) ---
+
+cd TD_Tool
+source venv/bin/activate
+git pull
 python main.py
 
 
