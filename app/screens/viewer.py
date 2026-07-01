@@ -1411,6 +1411,31 @@ class ScreenViewer(QtWidgets.QWidget):
 
     # ── OCR: розпізнавання тексту для сканованих PDF ─────────────────────────
 
+    def _ask_ocr_language(self) -> str | None:
+        """Питає користувача, якою мовою розпізнавати текст. Не пропонує
+        автоматично змішувати мови — кирилиця й латиниця мають однаково
+        намальовані літери, і мультимовний режим tesseract регулярно плутає
+        їх навіть у чисто одномовному тексті. Повертає None, якщо скасовано."""
+        installed = ocr.available_languages()
+        choices = [
+            (code, label) for code, label in ocr.LANGUAGE_CHOICES
+            if all(part in installed for part in code.split("+"))
+        ]
+        if not choices:
+            return "eng"
+        labels = [label for _, label in choices]
+        default_lang = ocr.pick_language()
+        default_index = next(
+            (i for i, (code, _) in enumerate(choices) if code == default_lang), 0
+        )
+        label, ok = QtWidgets.QInputDialog.getItem(
+            self, "Мова розпізнавання", "Якою мовою текст у документі?",
+            labels, default_index, editable=False,
+        )
+        if not ok:
+            return None
+        return next(code for code, lbl in choices if lbl == label)
+
     def _run_ocr(self):
         if not self._doc or not self._path:
             return
@@ -1430,6 +1455,10 @@ class ScreenViewer(QtWidgets.QWidget):
         ) != QtWidgets.QMessageBox.Yes:
             return
 
+        lang = self._ask_ocr_language()
+        if lang is None:
+            return
+
         default = self._path.replace(".pdf", "_ocr.pdf")
         out_path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Зберегти розпізнаний PDF", default, "PDF (*.pdf)"
@@ -1437,7 +1466,6 @@ class ScreenViewer(QtWidgets.QWidget):
         if not out_path:
             return
 
-        lang  = ocr.pick_language()
         total = self._doc.page_count
         progress = QtWidgets.QProgressDialog(
             "Розпізнавання тексту…", "Скасувати", 0, total, self

@@ -46,11 +46,25 @@ def available_languages() -> set[str]:
     return {ln.strip() for ln in lines[1:] if ln.strip()}
 
 
-def pick_language(preferred: tuple[str, ...] = ("ukr", "eng")) -> str:
-    """Обирає мову(и) розпізнавання з тих, що реально встановлені; фолбек — 'eng'."""
+LANGUAGE_CHOICES: tuple[tuple[str, str], ...] = (
+    ("ukr", "Українська"),
+    ("eng", "Англійська"),
+    ("ukr+eng", "Змішаний текст (укр + англ)"),
+)
+
+
+def pick_language(preferred: str = "ukr") -> str:
+    """Обирає мову розпізнавання: `preferred`, якщо вона встановлена, інакше 'eng'.
+
+    Свідомо НЕ комбінує кілька мов автоматично (напр. 'ukr+eng' за замовчуванням)
+    — кирилиця та латиниця мають купу однаково намальованих літер (а, о, е, р,
+    с, х, у...), і мультимовний режим tesseract регулярно плутає їх навіть у
+    чисто одномовному тексті, підставляючи символ не тієї абетки. Змішаний
+    режим лишається доступним (LANGUAGE_CHOICES), але як свідомий вибір
+    користувача в UI, а не мовчазний дефолт.
+    """
     installed = available_languages()
-    chosen = [lang for lang in preferred if lang in installed]
-    return "+".join(chosen) if chosen else "eng"
+    return preferred if preferred in installed else "eng"
 
 
 def has_text_layer(doc: fitz.Document, sample_pages: int = _TEXT_SAMPLE_PAGES) -> bool:
@@ -63,10 +77,19 @@ def has_text_layer(doc: fitz.Document, sample_pages: int = _TEXT_SAMPLE_PAGES) -
 
 def _ocr_page_to_pdf_bytes(page: fitz.Page, lang: str, tmp_dir: Path) -> bytes:
     """Рендерить сторінку в PNG і проганяє через tesseract, повертає байти
-    single-page PDF (зображення сторінки + невидимий шар розпізнаного тексту)."""
-    pix = page.get_pixmap(matrix=fitz.Matrix(_OCR_DPI / 72, _OCR_DPI / 72), alpha=False)
+    single-page PDF (зображення сторінки + невидимий шар розпізнаного тексту).
+
+    Рендер у градаціях сірого — менше кольорового шуму на вході tesseract.
+    Свідомо БЕЗ авто-визначення повороту через OSD: на реальних сканах з
+    трохи "заяложеним"/розмитим друком OSD плутає навіть просту кирилицю
+    (визначав "Arabic" з мізерною впевненістю) і розвертав правильно
+    орієнтовані сторінки на 180°, перетворюючи чіткий текст на кашу —
+    гірше, ніж узагалі без корекції."""
+    zoom = fitz.Matrix(_OCR_DPI / 72, _OCR_DPI / 72)
     png_path = tmp_dir / f"page_{page.number}.png"
     out_base = tmp_dir / f"page_{page.number}_ocr"
+
+    pix = page.get_pixmap(matrix=zoom, colorspace=fitz.csGRAY, alpha=False)
     pix.save(str(png_path))
 
     try:

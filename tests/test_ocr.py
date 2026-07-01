@@ -40,10 +40,10 @@ def test_available_languages_empty_when_tesseract_missing():
 
 def test_pick_language_prefers_ukrainian_when_installed():
     with patch.object(ocr, "available_languages", return_value={"eng", "ukr", "osd"}):
-        assert ocr.pick_language() == "ukr+eng"
+        assert ocr.pick_language() == "ukr"
 
 
-def test_pick_language_falls_back_to_english_only():
+def test_pick_language_falls_back_to_english_when_preference_missing():
     with patch.object(ocr, "available_languages", return_value={"eng", "osd"}):
         assert ocr.pick_language() == "eng"
 
@@ -51,6 +51,12 @@ def test_pick_language_falls_back_to_english_only():
 def test_pick_language_falls_back_when_nothing_installed():
     with patch.object(ocr, "available_languages", return_value=set()):
         assert ocr.pick_language() == "eng"
+
+
+def test_pick_language_respects_explicit_preference():
+    with patch.object(ocr, "available_languages", return_value={"eng", "ukr", "osd"}):
+        assert ocr.pick_language(preferred="eng") == "eng"
+        assert ocr.pick_language(preferred="ukr+eng") == "eng"  # не встановлено як єдина мова
 
 
 def test_ocr_document_reports_error_when_tesseract_missing(tmp_path):
