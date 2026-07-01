@@ -1,7 +1,10 @@
 import json
+import logging
 import os
-from dataclasses import dataclass, asdict
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
+
+_log = logging.getLogger(__name__)
 
 _THEME_FILE = os.path.join(os.path.dirname(__file__), "theme.json")
 
@@ -80,7 +83,7 @@ class ThemeManager:
             with open(_THEME_FILE, "w") as f:
                 json.dump(asdict(self._theme), f, indent=2)
         except OSError:
-            pass
+            _log.warning("Не вдалося зберегти тему у %s", _THEME_FILE, exc_info=True)
 
     def reset(self):
         self._theme = Theme()
@@ -99,14 +102,15 @@ class ThemeManager:
                     setattr(t, k, v)
             self._theme = t
         except (OSError, json.JSONDecodeError):
-            pass
+            _log.debug("Не вдалося завантажити тему з %s, використано типову", _THEME_FILE,
+                       exc_info=True)
 
     def _notify(self):
         for cb in self._listeners[:]:
             try:
                 cb()
             except Exception:
-                pass
+                _log.warning("Слухач зміни теми викинув виняток", exc_info=True)
 
 
 THEME_MGR = ThemeManager()

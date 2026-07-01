@@ -1,4 +1,11 @@
+import logging
 import sys
+
+_log = logging.getLogger(__name__)
+
+_SHCNE_ASSOCCHANGED = 0x08000000
+_SHCNF_IDLIST        = 0x0000
+_DWMWA_CAPTION_COLOR = 35
 
 
 def register_as_pdf_viewer() -> None:
@@ -30,7 +37,7 @@ def register_as_pdf_viewer() -> None:
              "FriendlyAppName", "TDTool")
         _set(rf"Software\Classes\{prog_id}\shell\open\command",
              "", open_cmd)
-        _set(rf"Software\Classes\.pdf\OpenWithProgids",
+        _set(r"Software\Classes\.pdf\OpenWithProgids",
              prog_id, b"", winreg.REG_NONE)
         _set(r"Software\TDTool\Capabilities",
              "ApplicationName", "TDTool")
@@ -43,9 +50,11 @@ def register_as_pdf_viewer() -> None:
 
         # Notify the shell so the change appears immediately
         import ctypes
-        ctypes.windll.shell32.SHChangeNotify(0x08000000, 0x0000, None, None)
+        ctypes.windll.shell32.SHChangeNotify(
+            _SHCNE_ASSOCCHANGED, _SHCNF_IDLIST, None, None
+        )
     except Exception:
-        pass
+        _log.debug("Не вдалося зареєструвати PDF-асоціацію", exc_info=True)
 
 
 def set_title_bar_color(widget, hex_color: str) -> None:
@@ -63,10 +72,9 @@ def set_title_bar_color(widget, hex_color: str) -> None:
         g = int(hex_color[3:5], 16)
         b = int(hex_color[5:7], 16)
         colorref = r | (g << 8) | (b << 16)   # COLORREF is 0x00BBGGRR
-        DWMWA_CAPTION_COLOR = 35
         value = ctypes.c_int(colorref)
         ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            hwnd, DWMWA_CAPTION_COLOR, ctypes.byref(value), ctypes.sizeof(value)
+            hwnd, _DWMWA_CAPTION_COLOR, ctypes.byref(value), ctypes.sizeof(value)
         )
     except Exception:
-        pass
+        _log.debug("Не вдалося зафарбувати тайтлбар", exc_info=True)

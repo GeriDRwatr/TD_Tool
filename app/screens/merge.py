@@ -1,12 +1,24 @@
+import logging
+import math
 import os
-from collections import defaultdict, OrderedDict, deque
-import fitz
-from PySide6 import QtWidgets, QtCore, QtGui
+from collections import OrderedDict, defaultdict, deque
 
-from ..constants import GREEN_COLOR, MAX_GROUPS, THUMB_SCALE, group_color
-from ..ui.widgets import (FullBorderPaper, GroupButton, GroupDeck,
-                          DraggableCard, ThumbnailActionButton)
+import fitz
+from PySide6 import QtCore, QtGui, QtWidgets
+
+from ..constants import MAX_GROUPS, THUMB_SCALE, group_color
 from ..pdf_utils import clear_layout, safe_thumbnail_render
+from ..ui.widgets import (
+    DraggableCard,
+    FullBorderPaper,
+    GroupButton,
+    GroupDeck,
+    ThumbnailActionButton,
+)
+
+_log = logging.getLogger(__name__)
+
+_A4_ASPECT_RATIO = math.sqrt(2)   # A4: висота/ширина
 
 
 class ScreenMergeMulti(QtWidgets.QWidget):
@@ -57,11 +69,13 @@ class ScreenMergeMulti(QtWidgets.QWidget):
         return bool(self.files)
 
     def add_file(self, path: str):
+        """Додає PDF за шляхом `path`. Кидає виняток fitz, якщо файл нечитаний —
+        стан екрана при цьому лишається незмінним."""
         if path in self.files:
             return
+        doc = self.get_doc(path)
         self.files.append(path)
 
-        doc = self.get_doc(path)
         for i in range(doc.page_count):
             self.page_list.append((path, i))
             self.page_groups.append(None)
@@ -75,7 +89,7 @@ class ScreenMergeMulti(QtWidgets.QWidget):
             try:
                 doc.close()
             except Exception:
-                pass
+                _log.debug("Не вдалося закрити документ", exc_info=True)
         self.doc_cache.clear()
         self.files.clear()
         self.page_list.clear()
@@ -372,7 +386,7 @@ class ScreenMergeMulti(QtWidgets.QWidget):
                 paths = [u.toLocalFile() for u in event.mimeData().urls()
                          if u.toLocalFile().lower().endswith(".pdf")]
                 for path in paths:
-                    self.add_file(path)
+                    self._add_file_safe(path)
                 event.acceptProposedAction()
                 return True
         return super().eventFilter(obj, event)
@@ -390,7 +404,7 @@ class ScreenMergeMulti(QtWidgets.QWidget):
             try:
                 doc.close()
             except Exception:
-                pass
+                _log.debug("Не вдалося закрити документ", exc_info=True)
         self.doc_cache.clear()
         self._pixmap_cache.clear()
         super().closeEvent(event)
@@ -424,10 +438,9 @@ class ScreenMergeMulti(QtWidgets.QWidget):
         if key in self._pixmap_cache:
             self._pixmap_cache.move_to_end(key)
             return self._pixmap_cache[key]
-        if rotation:
-            render_mat = fitz.Matrix(THUMB_SCALE, THUMB_SCALE).prerotate(rotation)
-        else:
-            render_mat = mat
+        render_mat = (
+            fitz.Matrix(THUMB_SCALE, THUMB_SCALE).prerotate(rotation) if rotation else mat
+        )
         pixmap = safe_thumbnail_render(self.get_doc(path).load_page(actual_i), render_mat)
         self._pixmap_cache[key] = pixmap
         if len(self._pixmap_cache) > self._PIXMAP_CACHE_MAX:
@@ -531,20 +544,7 @@ class ScreenMergeMulti(QtWidgets.QWidget):
             clear_layout(self.thumbs_grid)
             self._vi_to_card = {}
 
-            thumb_w      = self._thumb_base_w
-            base_thumb_h = int(thumb_w * 1.41421356237)   # A4 portrait reference height
-            if base_thumb_h > 360:
-                base_thumb_h = 360
-                thumb_w      = int(base_thumb_h / 1.41421356237)
-
-            cell_w     = thumb_w + 28
-            h_gap      = 14
-            viewport_w = self.scroll.viewport().width()
-            columns    = max(1, (viewport_w - 20) // (cell_w + h_gap))
-            total_w    = columns * cell_w + max(0, columns - 1) * h_gap
-            side_pad   = max(10, (viewport_w - total_w) // 2)
-            self.thumbs_grid.setContentsMargins(side_pad, 10, side_pad, 10)
-
+            thumb_w, base_thumb_h, cell_w, columns = self._thumb_grid_geometry()
             mat          = fitz.Matrix(THUMB_SCALE, THUMB_SCALE)
             file_idx_map = {path: idx + 1 for idx, path in enumerate(self.files)}
             items        = self._build_render_items()
@@ -552,20 +552,7 @@ class ScreenMergeMulti(QtWidgets.QWidget):
             for grid_i, item in enumerate(items):
                 row, col = grid_i // columns, grid_i % columns
                 if item['type'] == 'page':
-                    vi, path, ai = item['visual_i'], item['path'], item['actual_i']
-                    g_num      = item['group_num']
-                    rot        = item['rotation']
-                    file_color = group_color((file_idx_map[path] - 1) % 8 + 1)
-                    g_color    = group_color(g_num) if g_num else None
-                    pixmap     = self._get_pixmap(path, ai, mat, rot)
-                    # Effective AR after user rotation: 90/270 → swap w/h
-                    ar      = self._get_page_ar(path, ai)
-                    eff_ar  = ar if rot % 180 == 0 else 1.0 / ar
-                    thumb_h = max(40, min(int(thumb_w / eff_ar), 500))
-                    self._add_thumb_card(
-                        vi, ai, file_idx_map[path], row, col, pixmap,
-                        thumb_w, thumb_h, cell_w, file_color, g_color, g_num, rot
-                    )
+                    self._render_page_item(item, row, col, mat, file_idx_map, thumb_w, cell_w)
                 elif item['type'] == 'deck':
                     self._add_group_deck(item['group_num'], item['pages'],
                                          row, col, mat, thumb_w, base_thumb_h, cell_w)
@@ -575,6 +562,41 @@ class ScreenMergeMulti(QtWidgets.QWidget):
             self.scroll.viewport().update()
         finally:
             self._rendering = False
+
+    def _thumb_grid_geometry(self) -> tuple[int, int, int, int]:
+        """Обчислює (thumb_w, base_thumb_h, cell_w, columns) і виставляє відступи гриду
+        так, щоб грид був центрований по ширині viewport'а."""
+        thumb_w      = self._thumb_base_w
+        base_thumb_h = int(thumb_w * _A4_ASPECT_RATIO)   # A4 portrait reference height
+        if base_thumb_h > 360:
+            base_thumb_h = 360
+            thumb_w      = int(base_thumb_h / _A4_ASPECT_RATIO)
+
+        cell_w     = thumb_w + 28
+        h_gap      = 14
+        viewport_w = self.scroll.viewport().width()
+        columns    = max(1, (viewport_w - 20) // (cell_w + h_gap))
+        total_w    = columns * cell_w + max(0, columns - 1) * h_gap
+        side_pad   = max(10, (viewport_w - total_w) // 2)
+        self.thumbs_grid.setContentsMargins(side_pad, 10, side_pad, 10)
+        return thumb_w, base_thumb_h, cell_w, columns
+
+    def _render_page_item(self, item: dict, row: int, col: int, mat, file_idx_map: dict,
+                           thumb_w: int, cell_w: int) -> None:
+        vi, path, ai = item['visual_i'], item['path'], item['actual_i']
+        g_num      = item['group_num']
+        rot        = item['rotation']
+        file_color = group_color((file_idx_map[path] - 1) % 8 + 1)
+        g_color    = group_color(g_num) if g_num else None
+        pixmap     = self._get_pixmap(path, ai, mat, rot)
+        # Effective AR after user rotation: 90/270 → swap w/h
+        ar      = self._get_page_ar(path, ai)
+        eff_ar  = ar if rot % 180 == 0 else 1.0 / ar
+        thumb_h = max(40, min(int(thumb_w / eff_ar), 500))
+        self._add_thumb_card(
+            vi, ai, file_idx_map[path], row, col, pixmap,
+            thumb_w, thumb_h, cell_w, file_color, g_color, g_num, rot
+        )
 
     def _add_group_deck(self, group_num, pages, row, col, mat, thumb_w, thumb_h, cell_w):
         pixmaps  = [self._get_pixmap(path, ai, mat, self.page_rotations[vi])
@@ -594,6 +616,17 @@ class ScreenMergeMulti(QtWidgets.QWidget):
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(0)
 
+        paper = self._build_thumb_paper(pixmap, thumb_w, thumb_h, g_color, group_num)
+        strip = self._build_thumb_info_strip(actual_i, file_idx, file_color, cell_w, visual_i)
+
+        vbox.addWidget(paper, alignment=QtCore.Qt.AlignHCenter)
+        vbox.addWidget(strip, alignment=QtCore.Qt.AlignHCenter)
+
+        self.thumbs_grid.addWidget(card, row, col)
+        self._vi_to_card[visual_i] = card
+
+    def _build_thumb_paper(self, pixmap, thumb_w: int, thumb_h: int, g_color, group_num):
+        """Аркуш сторінки з тінню та, за наявності групи, кружечком-індикатором групи."""
         paper = FullBorderPaper(thumb_w, thumb_h, g_color, pixmap)
 
         shadow = QtWidgets.QGraphicsDropShadowEffect(paper)
@@ -610,7 +643,11 @@ class ScreenMergeMulti(QtWidgets.QWidget):
             ind.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
             ind.move(4, 4)
             ind.raise_()
+        return paper
 
+    def _build_thumb_info_strip(self, actual_i: int, file_idx: int, file_color: str,
+                                 cell_w: int, visual_i: int) -> QtWidgets.QWidget:
+        """Підпис "Ф-N с.M" під сторінкою + кнопки повороту/видалення."""
         fc    = QtGui.QColor(file_color)
         strip = QtWidgets.QWidget()
         strip.setFixedSize(cell_w, 60)
@@ -645,12 +682,7 @@ class ScreenMergeMulti(QtWidgets.QWidget):
         btns_hl.addWidget(del_btn)
 
         vbox_s.addWidget(btns_row, alignment=QtCore.Qt.AlignHCenter)
-
-        vbox.addWidget(paper, alignment=QtCore.Qt.AlignHCenter)
-        vbox.addWidget(strip, alignment=QtCore.Qt.AlignHCenter)
-
-        self.thumbs_grid.addWidget(card, row, col)
-        self._vi_to_card[visual_i] = card
+        return strip
 
     # ── run merge ─────────────────────────────────────────────────────────────
 
@@ -659,12 +691,7 @@ class ScreenMergeMulti(QtWidgets.QWidget):
             QtWidgets.QMessageBox.information(self, "Об'єднання", "Немає вибраних PDF.")
             return
 
-        group_pages: dict = defaultdict(list)
-        for vi, (path, actual_i) in enumerate(self.page_list):
-            g = self.page_groups[vi]
-            if g is not None:
-                group_pages[g].append((path, actual_i, self.page_rotations[vi]))
-
+        group_pages = self._group_pages_by_group()
         if not group_pages:
             QtWidgets.QMessageBox.information(
                 self, "Об'єднання",
@@ -679,37 +706,50 @@ class ScreenMergeMulti(QtWidgets.QWidget):
             return
 
         try:
-            created = 0
             used_names: set[str] = set()
             for g in sorted(group_pages):
-                out_doc = fitz.open()
-                try:
-                    for path, actual_i, rot in group_pages[g]:
-                        out_doc.insert_pdf(self.get_doc(path),
-                                           from_page=actual_i, to_page=actual_i)
-                        if rot:
-                            pg = out_doc[out_doc.page_count - 1]
-                            pg.set_rotation((pg.rotation + rot) % 360)
-                    base = self.group_names.get(g, "").strip() or f"merged_group_{g:02d}"
-                    if base.lower().endswith(".pdf"):
-                        base = base[:-4]
-                    name = base
-                    counter = 2
-                    while name in used_names:
-                        name = f"{base}_{counter}"
-                        counter += 1
-                    used_names.add(name)
-                    out_path = os.path.join(out_dir, f"{name}.pdf")
-                    out_doc.save(out_path)
-                    created += 1
-                finally:
-                    out_doc.close()
+                self._write_merged_group(g, group_pages[g], out_dir, used_names)
             QtWidgets.QMessageBox.information(
-                self, "Готово ✅", f"Готово!\nСтворено файлів: {created}"
+                self, "Готово ✅", f"Готово!\nСтворено файлів: {len(group_pages)}"
             )
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Помилка", f"Сталася помилка:\n{e}")
-            raise
+
+    def _group_pages_by_group(self) -> dict[int, list[tuple[str, int, int]]]:
+        """(шлях, номер сторінки, поворот) для кожної призначеної групи."""
+        group_pages: dict[int, list[tuple[str, int, int]]] = defaultdict(list)
+        for vi, (path, actual_i) in enumerate(self.page_list):
+            g = self.page_groups[vi]
+            if g is not None:
+                group_pages[g].append((path, actual_i, self.page_rotations[vi]))
+        return group_pages
+
+    def _unique_group_filename(self, group_num: int, used_names: set[str]) -> str:
+        base = self.group_names.get(group_num, "").strip() or f"merged_group_{group_num:02d}"
+        if base.lower().endswith(".pdf"):
+            base = base[:-4]
+        name = base
+        counter = 2
+        while name in used_names:
+            name = f"{base}_{counter}"
+            counter += 1
+        used_names.add(name)
+        return name
+
+    def _write_merged_group(self, group_num: int, pages: list[tuple[str, int, int]],
+                             out_dir: str, used_names: set[str]) -> None:
+        """Збирає сторінки однієї групи в один PDF і зберігає його у out_dir."""
+        out_doc = fitz.open()
+        try:
+            for path, actual_i, rot in pages:
+                out_doc.insert_pdf(self.get_doc(path), from_page=actual_i, to_page=actual_i)
+                if rot:
+                    pg = out_doc[out_doc.page_count - 1]
+                    pg.set_rotation((pg.rotation + rot) % 360)
+            name = self._unique_group_filename(group_num, used_names)
+            out_doc.save(os.path.join(out_dir, f"{name}.pdf"))
+        finally:
+            out_doc.close()
 
     # ── group management ──────────────────────────────────────────────────────
 
@@ -790,4 +830,15 @@ class ScreenMergeMulti(QtWidgets.QWidget):
             self, "Додати PDF-файли", "", "PDF files (*.pdf)"
         )
         for path in paths:
+            self._add_file_safe(path)
+
+    def _add_file_safe(self, path: str):
+        """add_file(), але з показом помилки замість падіння на нечитному PDF."""
+        try:
             self.add_file(path)
+        except Exception as e:
+            _log.warning("Не вдалося відкрити PDF %s", path, exc_info=True)
+            QtWidgets.QMessageBox.warning(
+                self, "Помилка відкриття файлу",
+                f"Не вдалося відкрити файл:\n{path}\n\n{e}",
+            )

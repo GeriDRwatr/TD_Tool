@@ -11,4 +11,5 @@
 >
   <rect width="18" height="18" x="3" y="3" rx="2" />
   <path d="M9 3v18" />
+  <rect x="4" y="4.3" width="4.3" height="15.4" rx="1" fill="currentColor" stroke="none" />
 </svg>

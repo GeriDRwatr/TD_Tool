@@ -22,7 +22,7 @@ from ...theme import THEME_MGR
 _ASSETS_DIR = os.path.join(os.path.dirname(__file__), "svg")
 
 _SVG_MAP: dict[str, str] = {
-    "sidebar":          "panel-left",
+    "sidebar":          "sidebar-toggle",
     "info":             "info",
     "zoom_out":         "zoom-out",
     "zoom_in":          "zoom-in",
@@ -189,11 +189,11 @@ def _draw_vector(p: QtGui.QPainter, rect: QtCore.QRectF,
             base = 2 * math.pi * i / teeth
             va   = base - math.pi / teeth
             vx, vy = cx + r_base * math.cos(va), cy + r_base * math.sin(va)
-            t0, t1 = base - htw, base + htw
+            ta0, ta1 = base - htw, base + htw
             if i == 0: gear.moveTo(vx, vy)
             else:       gear.lineTo(vx, vy)
-            gear.lineTo(cx + r_out * math.cos(t0), cy + r_out * math.sin(t0))
-            gear.arcTo(arc_r, -math.degrees(t0), -math.degrees(t1 - t0))
+            gear.lineTo(cx + r_out * math.cos(ta0), cy + r_out * math.sin(ta0))
+            gear.arcTo(arc_r, -math.degrees(ta0), -math.degrees(ta1 - ta0))
         gear.closeSubpath()
         ring_r = QtCore.QRectF(cx - r_ring, cy - r_ring, r_ring * 2, r_ring * 2)
         hub_r  = QtCore.QRectF(cx - r_hub,  cy - r_hub,  r_hub  * 2, r_hub  * 2)

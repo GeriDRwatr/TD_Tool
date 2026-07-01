@@ -1,14 +1,19 @@
+import logging
 import os
-from PySide6 import QtWidgets, QtCore, QtGui
+
+from PySide6 import QtCore, QtGui, QtWidgets
+
 from ..theme import THEME_MGR
 
 try:
     from docx import Document as DocxDocument
+
+    from ..docx_convert import docx_to_html
     HAS_DOCX = True
 except ImportError:
     HAS_DOCX = False
 
-_NS = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+_log = logging.getLogger(__name__)
 
 
 class WordEditor(QtWidgets.QWidget):
@@ -155,7 +160,7 @@ class WordEditor(QtWidgets.QWidget):
             return
         try:
             doc = DocxDocument(path)
-            html = self._docx_to_html(doc)
+            html = docx_to_html(doc)
             self._editor.setHtml(html)
             self._apply_page_format()   # restore after setHtml resets frame
             self._editor.moveCursor(QtGui.QTextCursor.Start)
@@ -166,185 +171,6 @@ class WordEditor(QtWidgets.QWidget):
             QtWidgets.QMessageBox.critical(
                 self, "Помилка", f"Не вдалося відкрити файл:\n{e}"
             )
-
-    # ── docx → HTML (full formatting) ────────────────────────────────────────
-
-    def _docx_to_html(self, doc) -> str:
-        import html as _h
-        try:
-            from docx.enum.text import WD_ALIGN_PARAGRAPH
-            ALIGN = {
-                WD_ALIGN_PARAGRAPH.LEFT:    'left',
-                WD_ALIGN_PARAGRAPH.CENTER:  'center',
-                WD_ALIGN_PARAGRAPH.RIGHT:   'right',
-                WD_ALIGN_PARAGRAPH.JUSTIFY: 'justify',
-                None: 'justify',
-            }
-        except Exception:
-            ALIGN = {None: 'justify'}
-
-        list_counters: dict[tuple, int] = {}
-
-        parts = [
-            "<html><body style='margin:0; padding:0;"
-            " font-family:\"Times New Roman\"; font-size:12pt; color:#111;'>"
-        ]
-
-        for para in doc.paragraphs:
-            pf = para.paragraph_format
-            sname = (para.style.name or '') if para.style else ''
-            sl = sname.lower()
-
-            align = ALIGN.get(para.alignment, 'justify')
-
-            # Spacing
-            sb = int(pf.space_before.pt) if pf.space_before else 0
-            sa = int(pf.space_after.pt)  if pf.space_after  else 6
-
-            # Line spacing
-            ls_css = ''
-            if pf.line_spacing:
-                try:
-                    from docx.enum.text import WD_LINE_SPACING
-                    if pf.line_spacing_rule in (
-                        WD_LINE_SPACING.MULTIPLE,
-                        WD_LINE_SPACING.AT_LEAST,
-                        None,
-                    ):
-                        ls_css = f' line-height:{float(pf.line_spacing):.2f};'
-                except Exception:
-                    pass
-
-            # Indentation (pt)
-            li_pt = 0
-            fi_pt = 0
-            if pf.left_indent:
-                try: li_pt = int(pf.left_indent.pt)
-                except Exception: pass
-            if pf.first_line_indent:
-                try: fi_pt = int(pf.first_line_indent.pt)
-                except Exception: pass
-
-            # List detection — check para pPr first, then style pPr (inheritance)
-            list_prefix = ''
-            numPr = None
-            pPr = para._p.pPr
-            if pPr is not None:
-                numPr = pPr.find(f'{_NS}numPr')
-            if numPr is None and para.style and para.style.element is not None:
-                spPr = para.style.element.find(f'{_NS}pPr')
-                if spPr is not None:
-                    numPr = spPr.find(f'{_NS}numPr')
-
-            if numPr is not None:
-                ilvl_el  = numPr.find(f'{_NS}ilvl')
-                numId_el = numPr.find(f'{_NS}numId')
-                ilvl  = int(ilvl_el.get(f'{_NS}val',  '0')) if ilvl_el  is not None else 0
-                numId = int(numId_el.get(f'{_NS}val', '0')) if numId_el is not None else 0
-
-                if numId > 0:
-                    # Reset deeper levels on increment
-                    for k in list(list_counters):
-                        if k[0] == numId and k[1] > ilvl:
-                            list_counters[k] = 0
-                    key = (numId, ilvl)
-                    list_counters[key] = list_counters.get(key, 0) + 1
-
-                    ltype = self._list_type(doc, numId, ilvl)
-                    if ltype == 'decimal':
-                        list_prefix = f'{list_counters[key]}.&nbsp;&nbsp;'
-                    else:
-                        list_prefix = '•&nbsp;&nbsp;'
-
-                    if li_pt == 0:
-                        li_pt = 36 + ilvl * 18
-                    if fi_pt == 0:
-                        fi_pt = -18
-
-            # Build paragraph style
-            p_css = (
-                f"text-align:{align};"
-                f" margin-top:{sb}pt; margin-bottom:{sa}pt;"
-                f" margin-left:{li_pt}pt; text-indent:{fi_pt}pt;{ls_css}"
-            )
-
-            # Detect heading tag
-            if   'heading 1' in sl: tag = 'h1'
-            elif 'heading 2' in sl: tag = 'h2'
-            elif 'heading 3' in sl: tag = 'h3'
-            else:                   tag = 'p'
-
-            # Build runs
-            runs_html = [list_prefix] if list_prefix else []
-            for run in para.runs:
-                text = _h.escape(run.text)
-                if not text:
-                    continue
-
-                span_css: list[str] = []
-
-                # Font family
-                fname = run.font.name
-                if fname:
-                    span_css.append(f"font-family:'{fname}'")
-
-                # Font size
-                fsize = run.font.size
-                if fsize:
-                    try: span_css.append(f"font-size:{fsize.pt:.1f}pt")
-                    except Exception: pass
-
-                # Text color
-                try:
-                    from docx.enum.dml import MSO_COLOR_TYPE
-                    c = run.font.color
-                    if c.type == MSO_COLOR_TYPE.RGB and c.rgb:
-                        span_css.append(f"color:#{c.rgb}")
-                except Exception:
-                    pass
-
-                if span_css:
-                    text = f'<span style="{"; ".join(span_css)}">{text}</span>'
-                if run.bold:           text = f'<b>{text}</b>'
-                if run.italic:         text = f'<i>{text}</i>'
-                if run.underline:      text = f'<u>{text}</u>'
-                if run.font.strike:    text = f'<s>{text}</s>'
-
-                runs_html.append(text)
-
-            inner = ''.join(runs_html) or '&nbsp;'
-            parts.append(f'<{tag} style="{p_css}">{inner}</{tag}>')
-
-        parts.append('</body></html>')
-        return '\n'.join(parts)
-
-    def _list_type(self, doc, numId: int, ilvl: int) -> str:
-        """Return 'decimal' or 'bullet' for a list level."""
-        try:
-            np = doc.part.numbering_part
-            if np is None:
-                return 'decimal'
-            root = np._element
-            abstract_id = None
-            for num_el in root.findall(f'{_NS}num'):
-                if num_el.get(f'{_NS}numId') == str(numId):
-                    an = num_el.find(f'{_NS}abstractNumId')
-                    if an is not None:
-                        abstract_id = an.get(f'{_NS}val')
-                    break
-            if abstract_id is None:
-                return 'decimal'
-            for an_el in root.findall(f'{_NS}abstractNum'):
-                if an_el.get(f'{_NS}abstractNumId') == abstract_id:
-                    for lvl in an_el.findall(f'{_NS}lvl'):
-                        if lvl.get(f'{_NS}ilvl') == str(ilvl):
-                            fmt_el = lvl.find(f'{_NS}numFmt')
-                            if fmt_el is not None:
-                                v = fmt_el.get(f'{_NS}val', 'decimal')
-                                return 'decimal' if v == 'decimal' else 'bullet'
-            return 'decimal'
-        except Exception:
-            return 'decimal'
 
     # ── save ──────────────────────────────────────────────────────────────────
 
@@ -392,7 +218,7 @@ class WordEditor(QtWidgets.QWidget):
                     elif a == QtCore.Qt.AlignJustify:
                         para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
                 except Exception:
-                    pass
+                    _log.debug("Не вдалося застосувати вирівнювання абзацу", exc_info=True)
                 it = block.begin()
                 while not it.atEnd():
                     frag = it.fragment()
@@ -413,7 +239,7 @@ class WordEditor(QtWidgets.QWidget):
                             try:
                                 run.font.color.rgb = RGBColor(c.red(), c.green(), c.blue())
                             except Exception:
-                                pass
+                                _log.debug("Не вдалося застосувати колір тексту", exc_info=True)
                     it += 1
                 block = block.next()
             doc.save(path)
@@ -429,7 +255,7 @@ class WordEditor(QtWidgets.QWidget):
     # ── print ─────────────────────────────────────────────────────────────────
 
     def _on_print(self):
-        from PySide6.QtPrintSupport import QPrinter, QPrintDialog
+        from PySide6.QtPrintSupport import QPrintDialog, QPrinter
         printer = QPrinter(QPrinter.HighResolution)
         if QPrintDialog(printer, self).exec() == QtWidgets.QDialog.Accepted:
             self._editor.print_(printer)
@@ -455,8 +281,9 @@ class WordEditor(QtWidgets.QWidget):
         if not out:
             return
 
+        src = self._path
         try:
-            if self._convert_via_libreoffice(out) or self._convert_via_docx2pdf(out):
+            if self._convert_via_libreoffice(src, out) or self._convert_via_docx2pdf(src, out):
                 pass
             else:
                 self._qt_print_to_pdf(out)
@@ -464,19 +291,19 @@ class WordEditor(QtWidgets.QWidget):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Помилка конвертування", f"{e}")
 
-    def _convert_via_libreoffice(self, out: str) -> bool:
+    def _convert_via_libreoffice(self, src: str, out: str) -> bool:
         import subprocess
         try:
             r = subprocess.run(
                 ["libreoffice", "--headless", "--convert-to", "pdf",
-                 "--outdir", os.path.dirname(os.path.abspath(out)), self._path],
+                 "--outdir", os.path.dirname(os.path.abspath(out)), src],
                 capture_output=True, timeout=60,
             )
             if r.returncode != 0:
                 return False
             lo = os.path.join(
                 os.path.dirname(os.path.abspath(out)),
-                os.path.splitext(os.path.basename(self._path))[0] + ".pdf",
+                os.path.splitext(os.path.basename(src))[0] + ".pdf",
             )
             if os.path.abspath(lo) != os.path.abspath(out) and os.path.exists(lo):
                 os.replace(lo, out)
@@ -484,10 +311,10 @@ class WordEditor(QtWidgets.QWidget):
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
 
-    def _convert_via_docx2pdf(self, out: str) -> bool:
+    def _convert_via_docx2pdf(self, src: str, out: str) -> bool:
         try:
             import docx2pdf
-            docx2pdf.convert(self._path, out)
+            docx2pdf.convert(src, out)
             return True
         except ImportError:
             return False

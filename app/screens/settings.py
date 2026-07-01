@@ -1,9 +1,9 @@
+from PySide6 import QtCore, QtGui, QtWidgets
+
+from ..theme import THEME_MGR
 from ..ui import icons as _icons
 
 _svg_icons = _icons
-from PySide6 import QtWidgets, QtCore, QtGui
-from ..theme import THEME_MGR
-
 
 # ── Mini live preview ──────────────────────────────────────────────────────────
 
@@ -293,8 +293,20 @@ class ScreenSettings(QtWidgets.QWidget):
         lay.setSpacing(2)
 
         t = THEME_MGR.get()
+        self._build_bg_section(lay, t)
+        self._build_nav_section(lay, t)
+        self._build_icons_section(lay, t)
+        self._build_group_colors_section(lay, t)
+        self._build_viewer_section(lay, t)
 
-        # ── Фони ──────────────────────────────────────────────────────────────
+        lay.addSpacing(20)
+        self._buttons(lay)
+        lay.addStretch()
+
+        scroll.setWidget(inner)
+        root.addWidget(scroll, 1)
+
+    def _build_bg_section(self, lay, t):
         self._section(lay, "ФОН ПРОГРАМИ")
         self._color_row(lay, "bg_main",    "Робоча область",         t.bg_main)
         self._color_row(lay, "bg_sidebar", "Бічна панель / Статус",  t.bg_sidebar)
@@ -302,7 +314,7 @@ class ScreenSettings(QtWidgets.QWidget):
         self._color_row(lay, "bg_hover",   "Роздільники в панелях",  t.bg_hover)
         self._color_row(lay, "accent",     "Акцентний колір",        t.accent)
 
-        # ── Навігація ─────────────────────────────────────────────────────────
+    def _build_nav_section(self, lay, t):
         lay.addSpacing(12)
         self._section(lay, "ПУНКТИ НАВІГАЦІЇ")
         self._color_alpha_row(lay,
@@ -330,7 +342,7 @@ class ScreenSettings(QtWidgets.QWidget):
             "Підпис — неактивний стан",
             t.nav_label_inactive_color, t.nav_label_inactive_alpha)
 
-        # ── Іконки ────────────────────────────────────────────────────────────
+    def _build_icons_section(self, lay, t):
         lay.addSpacing(12)
         self._section(lay, "ІКОНКИ")
         self._slider_row(lay, "icon_size",   "Розмір іконок",
@@ -339,7 +351,7 @@ class ScreenSettings(QtWidgets.QWidget):
                          5, 15, int(t.icon_stroke * 100), "%",
                          lambda v: round(v / 100, 3))
 
-        # ── Кольори груп ──────────────────────────────────────────────────────
+    def _build_group_colors_section(self, lay, t):
         lay.addSpacing(12)
         self._section(lay, "КОЛЬОРИ ГРУП")
         names = ["Зелений", "Синій", "Помаранчевий", "Фіолетовий",
@@ -367,7 +379,7 @@ class ScreenSettings(QtWidgets.QWidget):
             grid.addWidget(wrap, row_i, col_i)
         lay.addLayout(grid)
 
-        # ── Переглядач PDF ────────────────────────────────────────────────────
+    def _build_viewer_section(self, lay, t):
         lay.addSpacing(12)
         self._section(lay, "ПЕРЕГЛЯДАЧ PDF")
         self._color_row(lay, "viewer_bg",       "Фон під сторінками",     t.viewer_bg)
@@ -380,14 +392,6 @@ class ScreenSettings(QtWidgets.QWidget):
                         0, 255, t.statusbar_page_alpha)
         self._alpha_row(lay, "statusbar_cursor_alpha", "Рядок стану — координати",
                         0, 255, t.statusbar_cursor_alpha)
-
-        # ── Кнопки ────────────────────────────────────────────────────────────
-        lay.addSpacing(20)
-        self._buttons(lay)
-        lay.addStretch()
-
-        scroll.setWidget(inner)
-        root.addWidget(scroll, 1)
 
     # ── row builders ──────────────────────────────────────────────────────────
 

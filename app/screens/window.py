@@ -1,14 +1,18 @@
-import os
 import json
-from PySide6 import QtWidgets, QtCore, QtGui
+import logging
+import os
 
-from .merge import ScreenMergeMulti
-from .viewer import PdfViewerTabs
-from .word_editor import WordEditor
+from PySide6 import QtCore, QtGui, QtWidgets
+
+from ..platform import set_title_bar_color
 from ..theme import THEME_MGR
 from ..ui import icons as _icons
 from ..ui.widgets import _HoverMixin
-from ..platform import set_title_bar_color
+from .merge import ScreenMergeMulti
+from .viewer import PdfViewerTabs
+from .word_editor import WordEditor
+
+_log = logging.getLogger(__name__)
 
 _svg_icons = _icons   # unified — kept as alias so internal usages still compile
 
@@ -723,7 +727,7 @@ class ScreenMain(QtWidgets.QWidget):
         self._pdf_scenario = "editor"
         for p in self._viewer_tabs.paths():
             if p not in self._merge.files:
-                self._merge.add_file(p)
+                self._merge._add_file_safe(p)
         self._stack.setCurrentWidget(self._merge)
         self._update_pdf_btn_states()
 
@@ -766,7 +770,14 @@ class ScreenMain(QtWidgets.QWidget):
         self._pdf_scenario   = "viewer"
         self._viewer_tabs.reset()
         for p in paths:
-            self._viewer_tabs.add_tab(p)
+            try:
+                self._viewer_tabs.add_tab(p)
+            except Exception as e:
+                _log.warning("Не вдалося відкрити PDF %s", p, exc_info=True)
+                QtWidgets.QMessageBox.warning(
+                    self, "Помилка відкриття файлу",
+                    f"Не вдалося відкрити файл:\n{p}\n\n{e}",
+                )
         self._stack.setCurrentWidget(self._viewer_tabs)
         self._right_tool_stack.setCurrentIndex(1)
         self._right_sidebar.setVisible(True)

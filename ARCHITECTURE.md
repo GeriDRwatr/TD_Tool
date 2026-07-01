@@ -12,6 +12,7 @@ Stack: **PySide6 + PyMuPDF (fitz)**. All UI custom-painted (paintEvent). No Qt D
 | `app/theme.py` | `Theme` dataclass · `ThemeManager` · `THEME_MGR` singleton |
 | `app/constants.py` | `group_color(n)` reads THEME_MGR; fixed color constants |
 | `app/pdf_utils.py` | `clear_layout` · `safe_thumbnail_render` |
+| `app/docx_convert.py` | `docx_to_html()` · `list_type()` — чиста конвертація docx.Document → HTML, без Qt (тестується юніт-тестами) |
 | `app/platform.py` | `register_as_pdf_viewer()` · `set_title_bar_color()` — Windows-only; no-op elsewhere |
 | `app/ui/icons/` | **Python package** — unified icon renderer: `draw(p,rect,name,color)` auto-selects Lucide SVG or hand-drawn vector; `sf_font(px,w)` |
 | `app/ui/icons/svg/` | 24 Lucide SVG files bundled with the package |
@@ -23,6 +24,8 @@ Stack: **PySide6 + PyMuPDF (fitz)**. All UI custom-painted (paintEvent). No Qt D
 | `app/screens/word_editor.py` | `WordEditor` — embedded .docx editor (workspace screen) |
 | `app/theme.json` | Saved theme overrides — runtime, gitignored |
 | `window_state.json` | Saved window size — runtime, gitignored |
+| `tests/` | pytest-юніт-тести для чистої логіки (`docx_convert`, `pdf_utils`, `theme`) |
+| `pyproject.toml` | Конфіг `ruff` (lint+format), `mypy`, `pytest` |
 
 ### Linux packaging (`linux/`)
 
@@ -246,15 +249,17 @@ _apply_page_format():
 
 ```python
 _load(path):
-  DocxDocument(path) → _docx_to_html(doc) → editor.setHtml(html)
+  DocxDocument(path) → docx_convert.docx_to_html(doc) → editor.setHtml(html)
   _apply_page_format()   # setHtml() resets rootFrame → must reapply
   editor.moveCursor(Start)
   _path = path; _modified = False
 ```
 
-### docx → HTML conversion (_docx_to_html)
+### docx → HTML conversion (app/docx_convert.py)
 
-Fully manual conversion via python-docx XML — no mammoth dependency.
+Винесено в окремий модуль без залежності від Qt (легко тестується юніт-тестами,
+див. `tests/test_docx_convert.py`). Повністю ручна конвертація через python-docx XML —
+без залежності mammoth.
 
 ```
 Per paragraph:
@@ -268,7 +273,7 @@ List detection (two-level lookup):
   1. para._p.pPr → numPr element   (direct paragraph override)
   2. para.style.element → pPr → numPr   (inherited from style, e.g. "List Number")
   numId + ilvl → counter tracking per (numId, ilvl) key
-  _list_type(doc, numId, ilvl):
+  list_type(doc, numId, ilvl):
     doc.part.numbering_part → abstractNum → lvl → numFmt
     "decimal" → "N.  " prefix;  else → "•  " prefix
     margin-left=36+ilvl*18pt, text-indent=-18pt (hanging indent)

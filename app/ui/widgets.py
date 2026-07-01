@@ -1,7 +1,8 @@
-from PySide6 import QtWidgets, QtCore, QtGui
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..constants import group_color as _group_color
 from ..ui import icons as _icons
+
 # svg_icons merged into ui.icons — unified draw() dispatches automatically
 _svg_icons = _icons
 
@@ -22,17 +23,17 @@ class _HoverMixin:
 
     def _init_hover(self):
         self._hover = False
-        self.setAttribute(QtCore.Qt.WA_Hover)  # type: ignore[attr-defined]
+        self.setAttribute(QtCore.Qt.WA_Hover)
 
     def event(self, e):
         t = e.type()
         if t == QtCore.QEvent.HoverEnter:
             self._hover = True
-            self.update()   # type: ignore[attr-defined]
+            self.update()
         elif t == QtCore.QEvent.HoverLeave:
             self._hover = False
-            self.update()   # type: ignore[attr-defined]
-        return super().event(e)  # type: ignore[misc]
+            self.update()
+        return super().event(e)
 
 
 class ThumbnailActionButton(_HoverMixin, QtWidgets.QAbstractButton):
@@ -202,7 +203,7 @@ class GroupDeck(QtWidgets.QWidget):
         cx = self._x_center + tw / 2.0 - s * 10.0
         cy = self.TOP_PAD   + th / 2.0 - s * 10.0
 
-        for i, (r0, r1) in enumerate(zip(self._rest_tx, self._spread_tx)):
+        for i, (r0, r1) in enumerate(zip(self._rest_tx, self._spread_tx, strict=True)):
             dx = r0[0] + (r1[0] - r0[0]) * s
             dy = r0[1] + (r1[1] - r0[1]) * s
             card_x = cx + dx - tw / 2.0

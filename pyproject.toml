@@ -1,0 +1,34 @@
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+exclude = ["venv", "Lucide", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = [
+    "E501",  # довжину рядків контролює formatter, не lint
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Компактні однорядкові геометричні вирази для hand-drawn векторних іконок
+# (кожна elif-гілка — самодостатня формула; розбиття на функції для ~20 іконок
+# зараз не окупається і ризикує внести помилки в координати без візуальної звірки).
+"app/ui/icons/__init__.py" = ["E701", "E702", "E741"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+exclude = ["venv", "Lucide", "build", "dist"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+# PySide6 підтримує "плаский" доступ до Qt-переліків (Qt.PointingHandCursor замість
+# Qt.CursorShape.PointingHandCursor) під час виконання, але власні stub-файли PySide6
+# типізують лише вкладену форму — це системний false-positive, а не реальна помилка.
+disable_error_code = ["attr-defined"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
