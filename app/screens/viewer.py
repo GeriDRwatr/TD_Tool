@@ -533,6 +533,12 @@ class _ThumbnailItem(QtWidgets.QWidget):
             self._active = v
             self.update()
 
+    def set_pixmap(self, pixmap: QtGui.QPixmap):
+        self._pixmap = pixmap
+        self.setFixedSize(pixmap.width() + self._PAD * 2,
+                          pixmap.height() + self._PAD * 2 + 18)
+        self.update()
+
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.LeftButton:
             self.clicked.emit(self._page_num)
@@ -581,20 +587,35 @@ class _ThumbnailPanel(QtWidgets.QScrollArea):
 
         self._items:   list[_ThumbnailItem] = []
         self._current = -1
+        self._doc:   fitz.Document | None = None
+        self._scale: float                = 0.2
 
     def load_doc(self, doc: fitz.Document):
         self.clear()
         if not doc:
             return
+        self._doc = doc
         pr    = doc.load_page(0).rect
-        scale = max(0.05, min(0.5, _THUMB_TARGET_W / max(pr.width, 1.0)))
-        mat   = fitz.Matrix(scale, scale)
+        self._scale = max(0.05, min(0.5, _THUMB_TARGET_W / max(pr.width, 1.0)))
+        mat   = fitz.Matrix(self._scale, self._scale)
         for i in range(doc.page_count):
             pix  = safe_thumbnail_render(doc.load_page(i), mat)
             item = _ThumbnailItem(i, pix)
             item.clicked.connect(self.page_selected.emit)
             self._vbox.addWidget(item, alignment=QtCore.Qt.AlignHCenter)
             self._items.append(item)
+
+    def update_rotation(self, page_num: int, rotation: int):
+        if not self._doc or page_num >= len(self._items):
+            return
+        page = self._doc.load_page(page_num)
+        rect = page.rect
+        # Post-rotation width: 90°/270° swaps width and height
+        post_w = rect.height if (rotation % 180 == 90) else rect.width
+        scale = max(0.05, min(0.5, _THUMB_TARGET_W / max(post_w, 1.0)))
+        mat = fitz.Matrix(scale, scale).prerotate(rotation)
+        pix = safe_thumbnail_render(page, mat)
+        self._items[page_num].set_pixmap(pix)
 
     def clear(self):
         for it in self._items:
@@ -710,6 +731,7 @@ class ScreenViewer(QtWidgets.QWidget):
     sidebar_toggle_requested = QtCore.Signal()        # toggle button clicked
     sidebar_mode_requested   = QtCore.Signal(str)    # "thumbnails" or "toc" from view menu
     current_page_changed     = QtCore.Signal(int)    # visible page index changed
+    page_rotation_changed    = QtCore.Signal(int, int)  # page_num, rotation_degrees
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1272,6 +1294,7 @@ class ScreenViewer(QtWidgets.QWidget):
         pw.set_rotation(pw._rotation + 90)
         self._rebuild_page_layout()
         self._go_to_page(self._current_page)
+        self.page_rotation_changed.emit(self._current_page, pw._rotation)
 
     # ── export PDF with rotations applied ────────────────────────────────────
 
@@ -1604,6 +1627,8 @@ class _FileTabBar(QtWidgets.QTabBar):
         self._drag_offset = 0.0
         self._press_x = 0.0
         self._left_offset = 0   # px reserved on the left (matches open sidebar width)
+        self._scroll_px:   int = 0   # our own horizontal scroll offset in pixels
+        self.setUsesScrollButtons(False)  # native ◄► suppressed; we scroll via _scroll_px
 
     # ── sizing ────────────────────────────────────────────────────────────────
 
@@ -1629,55 +1654,51 @@ class _FileTabBar(QtWidgets.QTabBar):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._scroll_px = min(self._scroll_px, self._max_scroll())
         # tab widths are a function of bar width (shrink-to-fit) — force relayout
         self.updateGeometry()
         self.update()
 
-    # ── scroll-button interception ────────────────────────────────────────────
+    # ── scrolling (custom pixel offset — no Qt native scroll buttons) ──────────
 
-    def childEvent(self, event):
-        super().childEvent(event)
-        if event.added() and isinstance(event.child(), QtWidgets.QToolButton):
-            btn = event.child()
-            btn.setFixedWidth(44)
-            btn.installEventFilter(self)
+    def _tab_step(self) -> int:
+        return self.tabSizeHint(0).width() if self.count() else 64
 
-    def eventFilter(self, watched, event):
-        if (isinstance(watched, QtWidgets.QToolButton)
-                and event.type() == QtCore.QEvent.Paint):
-            self._paint_scroll_btn(watched)
-            return True
-        return super().eventFilter(watched, event)
+    def _max_scroll(self) -> int:
+        total = sum(self.tabSizeHint(i).width() for i in range(self.count()))
+        return max(0, total - (self.width() - self._left_offset))
 
-    def _paint_scroll_btn(self, btn: QtWidgets.QToolButton):
-        t = THEME_MGR.get()
-        p = QtGui.QPainter(btn)
-        p.setRenderHint(QtGui.QPainter.Antialiasing)
+    def scroll_left(self):
+        """Switch to the previous tab and scroll the view to show it."""
+        idx = self.currentIndex()
+        if idx > 0:
+            self.setCurrentIndex(idx - 1)
+            self._ensure_tab_visible(idx - 1)
 
-        bg = QtGui.QColor(t.bg_hover if btn.underMouse() else t.bg_main)
-        p.fillRect(btn.rect(), bg)
+    def scroll_right(self):
+        """Switch to the next tab and scroll the view to show it."""
+        idx = self.currentIndex()
+        if idx < self.count() - 1:
+            self.setCurrentIndex(idx + 1)
+            self._ensure_tab_visible(idx + 1)
 
-        # thin separator on the inner edge
-        sep_x = 0 if btn.arrowType() == QtCore.Qt.LeftArrow else btn.width() - 1
-        p.fillRect(QtCore.QRect(sep_x, 0, 1, btn.height()),
-                   QtGui.QColor(t.bg_border))
+    def _ensure_tab_visible(self, index: int):
+        rect = self._logical_tab_rect(index)
+        if rect.left() < self._left_offset:
+            self._scroll_px = max(0, self._scroll_px - (self._left_offset - rect.left()))
+            self.update()
+        elif rect.right() > self.width():
+            self._scroll_px = min(self._max_scroll(), self._scroll_px + (rect.right() - self.width()))
+            self.update()
 
-        m = 12
-        icon_r = QtCore.QRectF(m, m, btn.width() - 2 * m, btn.height() - 2 * m)
-        color  = QtGui.QColor(255, 255, 255, 200 if btn.underMouse() else 150)
+    def reset_scroll(self):
+        self._scroll_px = 0
+        self.update()
 
-        if btn.arrowType() == QtCore.Qt.LeftArrow:
-            _icons.draw(p, icon_r, "arrow_left", color)
-        else:
-            # mirror arrow_left horizontally → right arrow
-            p.save()
-            cx = icon_r.center().x()
-            p.translate(cx, 0)
-            p.scale(-1.0, 1.0)
-            p.translate(-cx, 0)
-            _icons.draw(p, icon_r, "arrow_left", color)
-            p.restore()
-        p.end()
+    def tabRemoved(self, index: int):
+        super().tabRemoved(index)
+        self._scroll_px = min(self._scroll_px, self._max_scroll())
+        self.update()
 
     def set_left_offset(self, px: int) -> None:
         if self._left_offset == px:
@@ -1687,8 +1708,11 @@ class _FileTabBar(QtWidgets.QTabBar):
         self.update()
 
     def _logical_tab_rect(self, index: int) -> QtCore.QRect:
-        """Qt lays out tabs from x=0; shift by _left_offset (sidebar width when open)."""
-        return self.tabRect(index).translated(self._left_offset, 0)
+        """Compute tab position from scratch — ignores Qt's internal scroll offset."""
+        x = self._left_offset - self._scroll_px
+        for i in range(index):
+            x += self.tabSizeHint(i).width()
+        return QtCore.QRect(x, 0, self.tabSizeHint(index).width(), self._TAB_H)
 
     def _tab_at(self, pos: QtCore.QPoint) -> int:
         """Hit-test against logical (offset-adjusted) tab rects."""
@@ -1837,7 +1861,6 @@ class _FileTabBar(QtWidgets.QTabBar):
         text_alpha = 0.95 if selected else (0.80 + 0.15 * hover)
         p.setPen(QtGui.QColor(255, 255, 255, int(255 * text_alpha)))
         font = self.font()
-        font.setWeight(QtGui.QFont.DemiBold if selected else QtGui.QFont.Normal)
         p.setFont(font)
         fm = QtGui.QFontMetrics(font)
         elided = fm.elidedText(self.tabText(i), QtCore.Qt.ElideRight, max(0, text_rect.width()))
@@ -1871,11 +1894,12 @@ class _FileTabBar(QtWidgets.QTabBar):
 
         # layers 1+2: every non-selected tab — background, then its own text/close — fully
         # under the selected tab so nothing of theirs can show through it
+        bar_rect = self.rect()
         for i in range(self.count()):
             if i == selected_idx:
                 continue
             rect = self._tab_draw_rect(i)
-            if not rect.isValid():
+            if not rect.isValid() or not rect.intersects(bar_rect):
                 continue
             hover = self._hover_progress.get(i, 0.0)
             p.fillPath(self._rounded_top_path(rect, self._RADIUS), _blend(inactive_bg, hover_bg, hover))
@@ -1893,6 +1917,54 @@ class _FileTabBar(QtWidgets.QTabBar):
                 bleed = rect.adjusted(-self._RADIUS, 0, self._RADIUS, 0)
                 p.fillPath(self._rounded_top_path(bleed, self._RADIUS), active_bg)
                 self._paint_tab_content(p, selected_idx, rect, True, hover)
+        p.end()
+
+
+class _TabBarIconBtn(_HoverMixin, QtWidgets.QAbstractButton):
+    """Custom-painted icon button for the tab-bar row (+ / nav indicators)."""
+
+    _W = 34
+
+    def __init__(self, icon_name: str, sep_right: bool = False, sep_left: bool = False, parent=None):
+        super().__init__(parent)
+        self._icon_name  = icon_name
+        self._sep_right  = sep_right
+        self._sep_left   = sep_left
+        self.setFixedSize(self._W, _FileTabBar._TAB_H)
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._init_hover()
+
+    def paintEvent(self, event):
+        t = THEME_MGR.get()
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+
+        bar_bg   = QtGui.QColor(t.bg_main)
+        hover_bg = _blend(bar_bg, QtGui.QColor(t.viewer_bg), 0.22)
+
+        # Base fill — same as bar background so buttons merge into the bar
+        p.fillRect(self.rect(), bar_bg)
+
+        # Hover: rounded-top highlight, exactly like an inactive tab hover
+        if self._hover:
+            p.fillPath(
+                _FileTabBar._rounded_top_path(self.rect(), _FileTabBar._RADIUS),
+                hover_bg,
+            )
+
+        if self._sep_left:
+            p.fillRect(QtCore.QRect(0, 0, 1, self.height()),
+                       QtGui.QColor(t.bg_border))
+        if self._sep_right:
+            p.fillRect(QtCore.QRect(self.width() - 1, 0, 1, self.height()),
+                       QtGui.QColor(t.bg_border))
+
+        sz = 16
+        r = self.rect()
+        icon_r = QtCore.QRectF(r.center().x() - sz / 2, r.center().y() - sz / 2, sz, sz)
+        color = QtGui.QColor(255, 255, 255, 200 if self._hover else 155)
+        _svg_icons.draw(p, icon_r, self._icon_name, color)
         p.end()
 
 
@@ -1946,28 +2018,34 @@ class PdfViewerTabs(QtWidgets.QWidget):
         tab_row_layout.setContentsMargins(0, 0, 0, 0)
         tab_row_layout.setSpacing(0)
 
+        self._btn_new_tab = _TabBarIconBtn("tab_plus", sep_left=True)
+        self._btn_new_tab.setToolTip("Відкрити ще один PDF")
+        self._btn_new_tab.clicked.connect(self._on_add_clicked)
+
+        self._btn_scroll_left = _TabBarIconBtn("chevron_left")
+        self._btn_scroll_left.setToolTip("Прокрутити вкладки ліворуч")
+
+        self._btn_scroll_right = _TabBarIconBtn("chevron_right")
+        self._btn_scroll_right.setToolTip("Прокрутити вкладки праворуч")
+
         self._bar = _FileTabBar()
         self._bar.tabCloseRequested.connect(self._close_tab)
         self._bar.currentChanged.connect(self._on_bar_changed)
         self._bar.tabMoved.connect(self._on_tab_moved)
+        self._btn_scroll_left.clicked.connect(self._bar.scroll_left)
+        self._btn_scroll_right.clicked.connect(self._bar.scroll_right)
         tab_row_layout.addWidget(self._bar, 1)
 
-        t0 = THEME_MGR.get()
-        self._btn_new_tab = QtWidgets.QToolButton()
-        self._btn_new_tab.setText("+")
-        self._btn_new_tab.setFixedSize(36, _FileTabBar._TAB_H)
-        self._btn_new_tab.setCursor(QtCore.Qt.PointingHandCursor)
-        self._btn_new_tab.setFocusPolicy(QtCore.Qt.NoFocus)
-        self._btn_new_tab.setToolTip("Відкрити ще один PDF")
-        self._btn_new_tab.clicked.connect(self._on_add_clicked)
         tab_row_layout.addWidget(self._btn_new_tab)
+        tab_row_layout.addWidget(self._btn_scroll_left)
+        tab_row_layout.addWidget(self._btn_scroll_right)
 
         right_layout.addWidget(tab_row)
 
         self._bar_divider = QtWidgets.QFrame()
         self._bar_divider.setFixedHeight(1)
         self._bar_divider.setStyleSheet(
-            f"background: {t0.bg_border}; border: none;"
+            f"background: {THEME_MGR.get().bg_border}; border: none;"
         )
         right_layout.addWidget(self._bar_divider)
 
@@ -1998,10 +2076,10 @@ class PdfViewerTabs(QtWidgets.QWidget):
         self._bar.setTabToolTip(bar_idx, path)
         self._stack.insertWidget(doc_idx, viewer)
         self._bar.blockSignals(True)
-        self._bar.setCurrentIndex(doc_idx)
+        self._bar.setCurrentIndex(0)
         self._bar.blockSignals(False)
-        self._stack.setCurrentIndex(doc_idx)
-        self._connect_viewer(viewer)
+        self._stack.setCurrentIndex(0)
+        self._connect_viewer(self._stack.widget(0))
 
     def reset(self):
         while self._doc_count() > 0:
@@ -2024,23 +2102,11 @@ class PdfViewerTabs(QtWidgets.QWidget):
         t = THEME_MGR.get()
         self._stack.setStyleSheet(f"QStackedWidget {{ background: {t.viewer_bg}; }}")
         self._bar_divider.setStyleSheet(f"background: {t.bg_border}; border: none;")
-        self._bar.setStyleSheet("")   # scroll btns are custom-painted via eventFilter
+        self._bar.setStyleSheet("")
         self._bar.update()
-        # "+" button (always visible, outside the scroll area)
-        self._btn_new_tab.setStyleSheet(f"""
-            QToolButton {{
-                color: rgba(255,255,255,0.65);
-                background: {t.bg_main};
-                border: none;
-                border-left: 1px solid {t.bg_border};
-                font-size: 18px; font-weight: bold;
-                min-width: 36px; min-height: {_FileTabBar._TAB_H}px;
-            }}
-            QToolButton:hover  {{ color: rgba(255,255,255,0.95);
-                                  background: {t.bg_hover}; }}
-            QToolButton:pressed {{ background: {t.bg_border}; }}
-        """)
-        self._bar.update()
+        self._btn_new_tab.update()
+        self._btn_scroll_left.update()
+        self._btn_scroll_right.update()
         self._thumb_panel.apply_theme()
         self._toc_panel.apply_theme()
         for i in range(self._doc_count()):
@@ -2095,6 +2161,10 @@ class PdfViewerTabs(QtWidgets.QWidget):
                 self._toc_panel.page_selected.disconnect(prev._go_to_page)
             except Exception:
                 pass
+            try:
+                prev.page_rotation_changed.disconnect(self._thumb_panel.update_rotation)
+            except Exception:
+                pass
         if viewer is None:
             self._thumb_panel.clear()
             self._toc_panel.clear()
@@ -2112,6 +2182,7 @@ class PdfViewerTabs(QtWidgets.QWidget):
         viewer._side_mode       = self._sidebar_mode
         self._thumb_panel.page_selected.connect(viewer._go_to_page)
         self._toc_panel.page_selected.connect(viewer._go_to_page)
+        viewer.page_rotation_changed.connect(self._thumb_panel.update_rotation)
 
     def _toggle_sidebar(self):
         self._sidebar_open = not self._sidebar_open
